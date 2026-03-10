@@ -13,7 +13,13 @@
 
 /** CONFIGURAÇÕES */
 
-const SENHA_MESTRA = "senhadra15523"; /** senha*/
+const props = PropertiesService.getScriptProperties();
+const SENHA_MESTRA = props.getProperty('SENHA_MESTRA');
+
+// Se não estiver configurada, lance erro
+if (!SENHA_MESTRA) {
+  throw new Error("ERRO: SENHA_MESTRA não configurada nas propriedades do script. Configure antes de usar.");
+}
 
 const props = PropertiesService.getScriptProperties();
 const GEMINI_API_KEY = props.getProperty('GEMINI_API_KEY');
@@ -466,10 +472,17 @@ function encontrarContextoRelevante(pergunta) {
 
 function responderPergunta(pergunta, historico, modo, senhaRecebida) {
   
-  // VERIFICAÇÃO DE SEGURANÇA IMEDIATA no cliente a autenticação e feita no beckend para evitar manipulação do front 
+  // VERIFICAÇÃO DE SEGURANÇA NO SERVIDOR
   if (modo === 'Ensinar') {
-    if (senhaRecebida !== SENHA_MESTRA) {
-      Logger.log("⛔ Bloqueio de Segurança: Tentativa de usar modo Ensinar sem senha.");
+    // Obter o email do usuário autenticado
+    const userEmail = Session.getActiveUser().getEmail();
+    
+    // Verificar se está na lista de emails autorizados
+    const props = PropertiesService.getScriptProperties();
+    const emailsAutorizados = (props.getProperty('EMAILS_ADMIN') || '').split(',').map(e => e.trim());
+    
+    if (!emailsAutorizados.includes(userEmail)) {
+      Logger.log("⛔ Bloqueio de Segurança: Tentativa de usar modo Ensinar sem autorização.");
       return "⛔ ACESSO NEGADO: Você não tem permissão para usar o modo Ensinar.";
     }
   }
@@ -701,7 +714,8 @@ function testarChat() {
  // função usada para enontrar possiveis modelos 
 function listarModelosDisponiveis() {
   if (!GEMINI_API_KEY) {
-    Logger.log('❌ Chave de API não encontrada nas Propriedades do Script.');
+  throw new Error("ERRO CRÍTICO: GEMINI_API_KEY não configurada. Configure nas propriedades do script.");
+};
     return;
   }
   const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}`;
@@ -717,7 +731,7 @@ function listarModelosDisponiveis() {
       Logger.log(`❌ Erro ao listar modelos: ${data.error.message}`);
       return;
     }
-    Logger.log('✅ Modelos disponíveis para sua chave:');
+    Logger.log("✅ API Key carregada com sucesso (primeiros 4 caracteres: " + GEMINI_API_KEY.substring(0, 4) + "...)");
     const formattedModels = data.models.map(model => ({
       nome: model.name,
       metodosSuportados: model.supportedGenerationMethods
@@ -737,15 +751,20 @@ function doGet(e) {
   
   const template = HtmlService.createTemplateFromFile('index');
 
-  // --- LÓGICA DE SEGURANÇA --- segurança por obscuridade" (security through obscurity)
-  // Verifica se a URL tem: ?acesso=admin=senhadra15523
-  const parametroAcesso = e.parameter.acesso;
-  const chaveEsperada = "admin=" + SENHA_MESTRA;
-  const isAdmin = (parametroAcesso === chaveEsperada);
+  // --- AUTENTICAÇÃO SEGURA ---
+  // Obter o ID do usuário atual (Google Apps Script)
+  const userEmail = Session.getActiveUser().getEmail();
   
-  // Passa as variáveis para o HTML
+  // Lista de emails autorizados para modo Ensinar (armazenar em propriedades)
+  const props = PropertiesService.getScriptProperties();
+  const emailsAutorizados = (props.getProperty('EMAILS_ADMIN') || '').split(',').map(e => e.trim());
+  
+  // Verificar se o usuário está autorizado
+  const isAdmin = emailsAutorizados.includes(userEmail);
+  
+  // NÃO passar a senha para o HTML! Apenas um flag
   template.isAdmin = isAdmin; 
-  template.senhaAutenticada = isAdmin ? SENHA_MESTRA : ""; 
+  template.senhaAutenticada = ""; // Nunca passe a senha!
 
   // --- CARREGAMENTO DE IMAGENS ---
   Logger.log(`Buscando ${LOGO_FILE_NAME}...`);
