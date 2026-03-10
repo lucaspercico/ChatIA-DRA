@@ -9,7 +9,7 @@
 
   <style>
     :root {
-      --primary-color: #005A9C; /* Azul UNISUAM */
+      --primary-color: #005A9C;
       --primary-hover: #00487d;
       --user-message-bg: #005A9C;
       --ai-message-bg: #f0f4f8;
@@ -22,47 +22,101 @@
       --border-radius: 12px;
     }
 
+    html, body {
+      height: 100vh; 
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
-      background-color: var(--background-color);
-      margin: 0;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
       color: var(--text-color);
+      
+      background-size: cover;
+      background-position: center center;
+      background-repeat: no-repeat;
+      background-attachment: fixed; 
+
+      display: flex;
+      flex-direction: column; 
+      align-items: center;
+      padding: 20px; 
+      box-sizing: border-box; 
+      height: 100%; 
     }
 
     .chat-container {
       width: 100%;
       max-width: 700px;
-      height: 90vh;
-      max-height: 800px;
-      background-color: var(--card-background);
+      flex-grow: 1; 
+      
+      background-color: var(--card-background); 
       border-radius: var(--border-radius);
       box-shadow: var(--box-shadow);
       display: flex;
       flex-direction: column;
-      overflow: hidden;
+      overflow: visible; 
+      
+      box-sizing: border-box;
     }
 
     .chat-header {
-      padding: 20px;
+      padding: 15px 20px; 
       border-bottom: 1px solid var(--border-color);
-      text-align: center;
       font-weight: 600;
       color: var(--primary-color);
       font-size: 20px;
       flex-shrink: 0;
+      
+      display: flex;
+      align-items: center;
+      justify-content: center; 
+      position: relative; 
+      border-top-left-radius: var(--border-radius);
+      border-top-right-radius: var(--border-radius);
+    }
+
+    .header-logo {
+      height: 35px; 
+      width: auto;
+      object-fit: contain;
+      position: absolute;
+      left: 20px; 
+      top: 50%;
+      transform: translateY(-50%);
+    }
+
+    #clear-chat-btn {
+      position: absolute;
+      right: 15px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: #f0f4f8;
+      border: 1px solid var(--border-color);
+      color: #999;
+      font-size: 24px;
+      font-weight: bold;
+      line-height: 24px;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      cursor: pointer;
+      padding: 0;
+    }
+    #clear-chat-btn:hover {
+      background: #e0e0e0;
+      color: #333;
     }
     
     #chat-log {
-      flex-grow: 1;
+      flex-grow: 1; 
       padding: 20px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
       gap: 15px;
+      border-bottom: 1px solid var(--border-color); 
     }
 
     .message {
@@ -81,12 +135,19 @@
       align-items: center;
       flex-shrink: 0;
       background-color: var(--ai-message-bg);
+      overflow: hidden; 
     }
     
     .avatar svg {
       width: 22px;
       height: 22px;
       fill: #555;
+    }
+
+    .avatar .avatar-img {
+      width: 100%;  
+      height: 100%; 
+      object-fit: cover; 
     }
 
     .message-content {
@@ -96,8 +157,7 @@
       position: relative;
     }
 
-    /* User Message */
-    .user-message {
+      .user-message {
       align-self: flex-end;
       flex-direction: row-reverse;
     }
@@ -105,15 +165,13 @@
       background-color: #d6eaff;
     }
     .user-message .avatar svg {
-       fill: var(--primary-color);
+        fill: var(--primary-color);
     }
     .user-message .message-content {
       background-color: var(--user-message-bg);
       color: white;
       border-bottom-right-radius: 4px;
     }
-    
-    /* AI Message */
     .ai-message {
       align-self: flex-start;
     }
@@ -122,9 +180,11 @@
       color: var(--text-color);
       border-bottom-left-radius: 4px;
     }
-    .ai-message ul { padding-left: 20px; }
+    .ai-message ul { padding-left: 20px; margin-top: 5px; margin-bottom: 5px;}
     .ai-message li { margin-bottom: 8px; }
     .ai-message strong { color: var(--primary-color); }
+    .ai-message p { margin-top: 0; margin-bottom: 10px; }
+    .ai-message p:last-child { margin-bottom: 0; }
     
     .copy-button {
       background: none; border: 1px solid #ccc;
@@ -133,9 +193,7 @@
       display: inline-block;
     }
     .copy-button:hover { background-color: #e9e9e9; }
-
-
-    /* Typing Indicator */
+    
     .typing-indicator span {
         height: 8px; width: 8px; margin: 0 2px;
         background-color: #999; border-radius: 50%;
@@ -151,9 +209,10 @@
 
     .input-area {
       padding: 20px;
-      border-top: 1px solid var(--border-color);
-      background-color: #fff;
-      flex-shrink: 0;
+      background-color: #fff; 
+      flex-shrink: 0; 
+      border-bottom-left-radius: var(--border-radius);
+      border-bottom-right-radius: var(--border-radius);
     }
 
     textarea {
@@ -176,53 +235,367 @@
     button:disabled { background-color: #a0a0a0; cursor: not-allowed; }
     
     .chat-footer {
+      width: 100%;
+      max-width: 700px; 
       padding: 10px 20px;
       font-size: 12px;
-      color: #888;
       text-align: center;
-      border-top: 1px solid var(--border-color);
-      background-color: #fafafa;
       display: flex;
       justify-content: center;
       align-items: center;
       gap: 5px;
-      flex-shrink: 0;
+      
+      flex-shrink: 0; 
+      margin-top: 10px; 
+      box-sizing: border-box;
+
+      color: #FFFFFF; 
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); 
     }
     .chat-footer svg {
         width: 14px;
         height: 14px;
-        fill: #888;
+        fill: #FFFFFF; 
+        filter: drop-shadow(0 1px 1px rgba(0,0,0,0.5)); 
     }
+    
+    .feedback-buttons {
+      margin-top: 15px;
+      border-top: 1px solid var(--border-color);
+      padding-top: 10px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .feedback-buttons button {
+      background: none;
+      border: 1px solid #ccc;
+      color: #777;
+      padding: 2px 8px;
+      border-radius: 15px;
+      font-size: 18px; /* Tamanho dos emojis */
+      cursor: pointer;
+      line-height: 20px;
+      margin-top: 0;
+      width: auto;
+      transition: background-color 0.2s;
+    }
+    .feedback-buttons button:hover {
+      background-color: #f0f0f0;
+    }
+    .feedback-enviado {
+      font-size: 12px;
+      color: #777;
+      font-style: italic;
+    }
+    
+    /* --- INÍCIO DAS REGRAS DE LAYOUT --- */
+    
+    .input-controls-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 15px; 
+      margin-top: 10px;
+    }
+
+    
+    .input-controls-wrapper #send-button {
+      width: 100%; 
+      margin-top: 0;
+      height: 38px;
+      padding: 8px 15px;
+    }
+
+    /* O TOGGLE original, com z-index para o ícone */
+    .custom-toggle {
+      position: relative;
+      width: 130px; 
+      height: 38px;
+      flex-shrink: 0; 
+      z-index: 2; 
+      padding-right: 30px; 
+    }
+
+    /* --- FIM DAS REGRAS DE LAYOUT--- */
+
+
+    /* Esconde o checkbox real */
+    .custom-toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    /* O "trilho" deslizante */
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 30px;
+      bottom: 0;
+      background-color: #ccc;
+      transition: .4s;
+      border-radius: 38px;
+    }
+
+    /* O "botão" (círculo) que desliza */
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 30px;
+      width: 30px;
+      left: 4px;
+      bottom: 4px;
+      background-color: white;
+      transition: .4s;
+      border-radius: 50%;
+      z-index: 2; /* Fica por cima do texto */
+    }
+
+    /* O Texto (que muda) */
+    .toggle-slider:after {
+      /* Texto "Informar" (OFF / Padrão) */
+      content: 'Informar';
+      position: absolute;
+      right: 18px; /* Posição do texto "Informar" */
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 14px;
+      font-weight: 600;
+      color: #555;
+      z-index: 1;
+      transition: all 0.4s ease;
+    }
+
+    /* --- ESTADO "ON" (MARCADO = Ensinar) --- */
+    input:checked + .toggle-slider {
+      background-color: var(--primary-color);
+    }
+
+    /* Move o "botão" (círculo) */
+    input:checked + .toggle-slider:before {
+      transform: translateX(92px); 
+    }
+
+    /* Muda o texto e a posição */
+    input:checked + .toggle-slider:after {
+      content: 'Ensinar';
+      left: 18px; /* Posição do texto "Ensinar" */
+      right: auto;
+      color: white;
+    }
+
+    /* --- INÍCIO DO CSS PARA TOOLTIPS--- */
+
+    
+    /* O wrapper do botão deve crescer */
+    #send-button-wrapper {
+      position: relative; 
+      flex-grow: 1; 
+      z-index: 1; 
+    }
+    
+    /* Regra base para os wrappers */
+    .tooltip-wrapper {
+      position: relative;
+    }
+    
+    #pergunta-wrapper {
+      width: 100%;
+    }
+
+    /* 3. Estilo do ícone '?' */
+    .help-icon {
+      display: none; position: absolute;
+      width: 18px; height: 18px;
+      background-color: var(--primary-color); color: white;
+      border-radius: 50%; text-align: center;
+      font-size: 14px; line-height: 18px;
+      font-weight: bold; cursor: help;
+      z-index: 10;
+    }
+    
+    /* Posição para textarea */
+    #pergunta-wrapper .help-icon {
+      top: 12px; right: 12px;
+    }
+    /* Posição para botão */
+    #send-button-wrapper .help-icon {
+      top: 50%; transform: translateY(-50%);
+      right: 10px;
+    }
+    
+    /* Posição do ícone do toggle --- */
+    .custom-toggle .help-icon {
+      top: 0; 
+      right: 5px;
+    }
+    
+    /* 4. Estilo do balão de texto (tooltip) */
+    .help-icon .tooltip-text {
+      display: none; position: absolute;
+      bottom: 125%; left: 50%;
+      transform: translateX(-50%);
+      width: 230px; background-color: #333;
+      color: white; padding: 10px; border-radius: 6px;
+      font-size: 13px; font-weight: normal; line-height: 1.4;
+      text-align: left; z-index: 11;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    }
+    /* Ajuste do balão para o toggle */
+    .custom-toggle .tooltip-text {
+      left: auto; right: 0; transform: none;
+    }
+    
+    /* 5. Seta do balão */
+    .help-icon .tooltip-text::after {
+      content: ''; position: absolute;
+      top: 100%; left: 50%; margin-left: -5px;
+      border-width: 5px; border-style: solid;
+      border-color: #333 transparent transparent transparent;
+    }
+    .custom-toggle .tooltip-text::after {
+      left: auto; right: 10px; margin-left: 0;
+    }
+    
+    /* 6. Lógica de hover para mostrar/esconder */
+    .tooltip-wrapper:hover > .help-icon {
+      display: block;
+    }
+    .help-icon:hover .tooltip-text {
+      display: block;
+    }
+    /* --- FIM DO CSS PARA TOOLTIPS --- */
 
   </style>
 </head>
-<body>
+<body <? if (bgData) { ?>
+        style="background-image: url('data:<?= bgData.contentType ?>;base64,<?= bgData.base64 ?>');"
+      <? } else { ?>
+        style="background-color: var(--background-color);"
+      <? } ?>>
 
   <div class="chat-container">
-    <div class="chat-header">Assistente DRA - UNISUAM</div>
+    
+    <div class="chat-header">
+      <?
+        if (logoData) { 
+      ?>
+        <img src="data:<?= logoData.contentType ?>;base64,<?= logoData.base64 ?>" 
+             class="header-logo" 
+             alt="Logo">
+      <? } ?>
+      
+      <span>Assistente DRA - UNISUAM</span>
+      
+      <button id="clear-chat-btn" title="Limpar conversa" onclick="limparChat()">×</button>
+    </div>
+
     <div id="chat-log">
+      <div class="message ai-message">
+        <div class="avatar">
+          <?
+            if (avatarAiData) { 
+          ?>
+            <img class="avatar-img" alt="Avatar IA" src="data:<?= avatarAiData.contentType ?>;base64,<?= avatarAiData.base64 ?>">
+          <? 
+            } else { 
+          ?>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-3.5 12c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.5-6.5c-.83 0-1.5-.67-1.5-1.5S11.17 4.5 12 4.5s1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm3.5 6.5c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z"/></svg>
+          <? } ?>
+        </div>
+        <div class="message-content">
+          <p>Olá! Eu sou o assistente virtual do DRA. Como posso ajudar?</p>
+        </div>
       </div>
+    </div>
+    
     <div class="input-area">
-      <textarea id="pergunta" placeholder="Digite sua dúvida..."></textarea>
-      <button id="send-button" onclick="enviarPergunta()">Enviar</button>
-    </div>
-    <div class="chat-footer">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></svg>
-        <span>A utilização da IA é limitada a 60 solicitações por minuto.</span>
-    </div>
+      
+      <div class="tooltip-wrapper" id="pergunta-wrapper">
+        <textarea id="pergunta" placeholder="Digite sua dúvida..."></textarea>
+        
+        <span class="help-icon">
+          ?
+          <span class="tooltip-text">
+            Digite sua pergunta ou comando para o assistente aqui.
+          </span>
+        </span>
+      </div>
+      
+      <div class="input-controls-wrapper">
+      
+        <div class="tooltip-wrapper" id="send-button-wrapper">
+          <button id="send-button" onclick="enviarPergunta()">Enviar</button>
+          
+          <span class="help-icon">
+            ?
+            <span class="tooltip-text">
+              Clique aqui ou pressione enter para enviar sua pergunta ao assistente.
+            </span>
+          </span>
+        </div>
+        
+        <? if (isAdmin) { ?>
+            <label class="custom-toggle tooltip-wrapper">
+              <input type="checkbox" id="mode-toggle">
+              <span class="toggle-slider"></span>
+    
+              <span class="help-icon">
+                ?
+                <span class="tooltip-text">
+                  <b>Modo Informar (padrão):</b> O assistente responde voltado para o Aluno.<br><br>
+                  <b>Modo Ensinar:</b> O assistente responde e explica para um colaborador Inexperiente.
+                </span>
+              </span>
+            </label>
+        <? } ?>
+        
+      </div>
+      </div>
+
+  </div> <div class="chat-footer">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></svg>
+      <span>A utilização da IA é limitada a 60 solicitações por minuto.</span>
   </div>
 
 <script>
+  // --- SEGURANÇA: PEGAR SENHA DO SERVIDOR ---
+  const SENHA_AUTOMATICA = "<?= senhaAutenticada ?>";
+
   const chatLog = document.getElementById('chat-log');
   const perguntaTextarea = document.getElementById('pergunta');
   const sendButton = document.getElementById('send-button');
+  
+  // Nota: modeToggle agora pode ser null (se for aluno)
+  // Vamos pegá-lo dentro da função enviarPergunta para ser seguro.
 
-  // Ícones SVG para os avatares
+  var historico = [];
+
   const userAvatarSVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
-  const aiAvatarSVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-3.5 12c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.5-6.5c-.83 0-1.5-.67-1.5-1.5S11.17 4.5 12 4.5s1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm3.5 6.5c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z"/></svg>';
-
-
-  // Permite enviar com "Enter" (e Shift+Enter para nova linha)
+  
+  <?
+    var aiAvatarString;
+    if (avatarAiData) {
+      aiAvatarString = '<img class="avatar-img" alt="Avatar IA" src="data:' + avatarAiData.contentType + ';base64,' + avatarAiData.base64 + '">';
+    } else {
+      aiAvatarString = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-3.5 12c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.5-6.5c-.83 0-1.5-.67-1.5-1.5S11.17 4.5 12 4.5s1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm3.5 6.5c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z"/></svg>';
+    }
+  ?>
+  
+  const aiAvatarHTML = <?= aiAvatarString ?>;
+  
+  const firstMessageHTML = `
+      <div class="message ai-message">
+        <div class="avatar">
+          ${aiAvatarHTML}
+        </div>
+        <div class="message-content">
+          <p>Olá! Eu sou o assistente virtual do DRA. Como posso ajudar?</p>
+        </div>`;
+  
+  
   perguntaTextarea.addEventListener('keydown', function(event) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -236,7 +609,7 @@
 
     const avatar = document.createElement('div');
     avatar.classList.add('avatar');
-    avatar.innerHTML = sender === 'user' ? userAvatarSVG : aiAvatarSVG;
+    avatar.innerHTML = sender === 'user' ? userAvatarSVG : aiAvatarHTML;
 
     const messageContent = document.createElement('div');
     messageContent.classList.add('message-content');
@@ -244,13 +617,22 @@
     if (text.includes('typing-indicator')) {
         messageContent.innerHTML = text;
     } else {
-        messageContent.innerHTML = marked.parse(text);
+        messageContent.innerHTML = marked.parse(text); 
+        
         if (sender === 'ai') {
             const copyBtn = document.createElement('button');
             copyBtn.className = 'copy-button';
             copyBtn.textContent = 'Copiar';
             copyBtn.onclick = function() { copiarResposta(this); };
             messageContent.appendChild(copyBtn);
+            
+            const feedbackDiv = document.createElement('div');
+            feedbackDiv.className = 'feedback-buttons';
+            feedbackDiv.innerHTML = `
+              <button title="Gostei" onclick="darFeedback(this, 'like')">👍</button>
+              <button title="Não gostei" onclick="darFeedback(this, 'dislike')">👎</button>
+            `;
+            messageContent.appendChild(feedbackDiv);
         }
     }
     
@@ -258,14 +640,51 @@
     messageWrapper.appendChild(messageContent);
     chatLog.appendChild(messageWrapper);
     
-    chatLog.scrollTop = chatLog.scrollHeight;
+    setTimeout(function() {
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }, 0); 
     
     return messageWrapper;
   }
+  
+ 
+  
+  function limparChat() {
+    historico = [];
+    chatLog.innerHTML = firstMessageHTML;
+    perguntaTextarea.focus();
+  }
+
+  function darFeedback(buttonElement, feedbackType) {
+    const messageContent = buttonElement.closest('.message-content');
+    const aiMessage = messageContent.cloneNode(true); 
+    
+    aiMessage.querySelectorAll('.feedback-buttons, .copy-button').forEach(el => el.remove());
+    
+    const aiResponseText = aiMessage.innerHTML; 
+    
+    let userQuestionText = "Não foi possível encontrar a pergunta.";
+    const userMessageWrapper = buttonElement.closest('.ai-message').previousElementSibling;
+    if (userMessageWrapper && userMessageWrapper.classList.contains('user-message')) {
+      userQuestionText = userMessageWrapper.querySelector('.message-content').innerText;
+    }
+
+    buttonElement.parentElement.innerHTML = '<span class="feedback-enviado">Obrigado pelo feedback!</span>';
+
+    google.script.run
+      .withFailureHandler(err => console.error('Erro ao registrar feedback:', err))
+      .registrarFeedback(userQuestionText, aiResponseText, feedbackType);
+  }
+
 
   function enviarPergunta() {
     const pergunta = perguntaTextarea.value.trim();
     if (!pergunta) return;
+    
+    const suggestions = document.querySelector('.suggested-questions');
+    if (suggestions) {
+      suggestions.style.display = 'none';
+    }
 
     appendMessage('user', pergunta);
     perguntaTextarea.value = '';
@@ -273,12 +692,37 @@
 
     const typingIndicator = appendMessage('ai', '<div class="typing-indicator"><span></span><span></span><span></span></div>');
 
+    const TAMANHO_JANELA_HISTORICO = 10; 
+    const historicoRecente = historico.slice(-TAMANHO_JANELA_HISTORICO);
+
+    
+    const toggleEl = document.getElementById('mode-toggle');
+    let modo = 'Informar'; // Padrão
+    
+    // Se o elemento existe E está marcado, então é Ensinar
+    if (toggleEl && toggleEl.checked) {
+        modo = 'Ensinar';
+    }
+    // ----------------------------------
+
     google.script.run
-      .withSuccessHandler(function(resposta) {
+    .withSuccessHandler(function(resposta) {
         typingIndicator.remove();
-        appendMessage('ai', resposta || "Não recebi uma resposta válida.");
+        const respostaFormatada = resposta || "Não recebi uma resposta válida.";
+        appendMessage('ai', respostaFormatada);
+        
         sendButton.disabled = false;
         perguntaTextarea.focus();
+        
+        historico.push({ 
+          role: "user", 
+          parts: [{ text: pergunta }] 
+        });
+        historico.push({ 
+          role: "model", 
+          parts: [{ text: respostaFormatada }] 
+        });
+        
       })
       .withFailureHandler(function(err) {
         typingIndicator.remove();
@@ -287,13 +731,15 @@
         sendButton.disabled = false;
         perguntaTextarea.focus();
       })
-      .responderPergunta(pergunta);
+      // SENHA INVISÍVEL
+      .responderPergunta(pergunta, historicoRecente, modo, SENHA_AUTOMATICA);
   }
 
   function copiarResposta(buttonElement) {
     const messageContent = buttonElement.parentElement;
     const contentToCopy = messageContent.cloneNode(true);
-    contentToCopy.querySelector('.copy-button').remove();
+    
+    contentToCopy.querySelectorAll('.feedback-buttons, .copy-button').forEach(el => el.remove());
 
     navigator.clipboard.writeText(contentToCopy.innerText.trim())
       .then(() => {

@@ -1,732 +1,813 @@
 /***************************************************
  * Chat DRA com Gemini 2.5 Flash + Embeddings Cache
- * Autor: Lucas + I.A fiz em low-code :3
+ * Autor: Lucas + I.A fiz em low-code 
+ * * MODIFICADO: Versão final com RAG Top-K, Histórico,
+ * Retentativas de API e carregamento de imagens do Drive.
+ * Otimizações: Markdown, Feedback e Nome do Modelo.
+ * 
+    Ler e Limpar	getKnowledgeData
+    Traduzir para Números	getEmbeddings
+    Decidir o que é relevante	findMostRelevantChunks
+    Montar e Enviar o Pedido	callGemini
  ***************************************************/
 
-/** 🔑 CONFIGURAÇÕES */
-// LEIA A CHAVE DE FORMA SEGURA DAS PROPRIEDADES DO SCRIPT
+/** CONFIGURAÇÕES */
+
+const SENHA_MESTRA = "senhadra15523"; /** senha*/
+
 const props = PropertiesService.getScriptProperties();
 const GEMINI_API_KEY = props.getProperty('GEMINI_API_KEY');
 
 const EMBEDDING_MODEL = 'models/text-embedding-004';
 
-const GENERATIVE_MODEL = 'models/gemini-2.5-flash';
 
-/** 📚 BASE DE CONHECIMENTO */
-const BASE_TEXT = `DRA092 - ACADÊMICO | DECLARAÇÃO DE MATRÍCULA
-A declaração é um modelo padrão de documento disponível para ser impresso no ambiente.
-CONTÉM: 
-Informa os dados pessoais e dados acadêmicos gerais do aluno, tais como: status do período vigente,período equivalente, disciplinas matriculadas/carga horária, curso/reconhecimento, turno, atividades complementares, coeficiente de rendimento, previsão de conclusão do curso.
-COMO EMITIR:
-Ambiente do aluno
+const GENERATIVE_MODEL = 'models/gemini-flash-latest'; 
 
+// --- CONFIGURAÇÕES DE ARQUIVOS DO DRIVE ---
+const DRIVE_FOLDER_NAME = "I.A conhecimento";
+const KNOWLEDGE_FILE_NAME = "conhecimento.txt";
+const REPORT_FILE_NAME = "Relatorio_Pergunstas_Nao_Respondidas.txt";
+const LOGO_FILE_NAME = "logo.png"; 
 
-DESTINADA:
-* Confirmação de matrícula na IES
-* Cancelamento Pravaler (manual) 
-* Pendência de Documento (manual) 
-* ALERJ (manual) 
-* Detran (manual) 
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
 
+const BACKGROUND_FILE_NAME = "background.png"; // Seu arquivo se chama "fundo.png"
+const AVATAR_AI_FILE_NAME = "i.a.png"; 
 
-* Solicitação de alteração de Dados pessoais ➡️Solicitar o protocolo de alteração de dados.
-* Solicitação de informação de bolsa 100% ➡️Solicitar o protocolo para Declaração de Riocard.
-* Apresentação no Jáe ➡️Solicitar o protocolo para Declaração de Riocard.
-* Informativo de Modalidade Cursada ➡️Solicitar o protocolo para Declaração de Riocard.
-* C.R Zerado para alunos ingressantes ➡️ O C.R (Coeficiente de Rendimento) de alunos ingressantes não é exibido, mesmo com a dispensa de disciplinas. O motivo é que o C.R só é calculado e informado para disciplinas que foram efetivamente cursadas na Unisuam, conforme o manual do aluno.
-* Deseja a data da colação de grau➡️Solicitar o protocolo de declaração de conclusão de créditos apos a colação de grau.
-* Deseja informações de horário de Aula/Estágio de estágio obrigatório ➡️ Solicitar o protocolo de declaração própria do estágio de acordo com o curso.
-* Informações de Notas ➡️ As notas são informadas no histórico para simples conferência.
-* Informação de realização de prova➡️Para solicitar a confirmação de presença na unidade, use o protocolo 'ACADÊMICO | DECLARAÇÃO DE REALIZAÇÃO DE PROVAS'. Lembre-se que este documento é válido somente para provas presenciais e não se aplica a alunos EAD.
-* Retirada de dados específicos ➡️ ️Informar que é modelo padrão.
 
-
-DRA027- ACADÊMICO | DECLARAÇÃO DE MATRÍCULA PARA RIO CARD
-A declaração é um modelo padrão de documento disponível para ser impresso no ambiente.
-CONTÉM:
-Informa os dados pessoais e dados acadêmicos gerais do aluno, tais como: status do período vigente, período equivalente, disciplinas matriculadas, curso, turno, previsão de conclusão do curso, tabela de pagamentos para o período vigente, Bolsa/Fies/Pravaler (caso possua)
-COMO EMITIR:
-Ambiente do aluno
-
-
-DESTINADA:
-* Confirmação de matrícula na IES
-* Apresentação no Rio Card
-* Informação de Modalidade EAD
-* Informação de Bolsa 100%
-* Informação de Pravaler/FIES
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-
-
-* Solicitação de alteração de Dados pessoais ➡️Solicitar o protocolo de alteração de dados
-* Retirada de dados específicos ➡️ ️Informar que é modelo padrão.
-* Informa que não está constando a informação de Pravaler/FIES➡️Orientar o aluno que discorda do preview, informando que a informação não consta no documento. A declaração será realizada manualmente e enviada por e-mail.Solicita o modelo 
-* ALERJ ➡️Solicitar o protocolo "ACADÊMICO | DECLARAÇÃO DE MATRÍCULA", informando no esclarecimento que o modelo desejado é o ALERJ.
-DRA085 - ACADÊMICO | DECLARAÇÃO DE REALIZAÇÃO DE PROVAS
-Documento emitido manualmente para fornecer a confirmação de realização presencial da prova na unidade após o período de avaliações indicado no Calendário Acadêmico. Deve-se informar o nome, código da disciplina e data da avaliação para análise do comparecimento e emissão do documento.
-CONTÉM:
-Informa os dados pessoais e dados acadêmicos gerais do aluno, tais como: status do período vigente, matrícula, curso, turno, período equivalente, disciplinas/módulos + data de realização da prova. 
-COMO EMITIR:
-Ambiente do aluno
-
-
-DESTINADA:
-* Confirmação de realização de prova na unidade
-* Confirmação das provas: Integradoras e formadora[a]
-
-
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-
-
-* Solicitação de realização de prova EAD ➡️Não é disponibilizada devido a ser destinada à realização presencial na unidade
-* Solicitação de realização de provas de períodos anteriores ➡️Não é disponibilizada
-* Fora do período de prova ➡️ Não é disponibilizada, o aluno deve solicitar após a realização da prova na unidade. 
-
-
-DRA021- ACADÊMICO | DECLARAÇÃO DE PAGAMENTOS (ANO ANTERIOR)
-Esta declaração detalha todos os pagamentos realizados no ano anterior à solicitação. O documento não inclui juros e multas. Disponível para ser impresso no ambiente.
-CONTÉM: 
-Informa os dados pessoais e dados acadêmicos gerais do aluno, tais como: CNPJ da IES, matrícula, curso, tabela de pagamentos realizados. 
-
-
-DESTINADA:
-* Pagamentos realizados no ano anterior.
-* Imposto de renda.
-* Para fins de Informe de rendimentos.
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-
-
-* Deseja alteração para os pagamentos serem informados como realizados em nome de terceiros ➡️Informar  que é o modelo padrão.
-* Solicitação de pagamento para o ano atual ➡️ Solicitar o protocolo “ACADÊMICO | DECLARAÇÃO DE PAGAMENTOS (ANO ATUAL)”
-* Solicita alteração do modelo ➡️ Informar que é o modelo padrão.
-* Aluno ingressante que deseja os informes de pagamento ➡️ Solicitar o protocolo “ACADÊMICO | DECLARAÇÃO DE PAGAMENTOS (ANO ATUAL)”
-* Divergência no pagamento ➡️ O mesmo deve discordar do preview informando o ocorrido. O DRA encaminha a solicitação para o financeiro para análise. 
-* Informa que deseja o informe de outros anos➡️Solicitar o protocolo “FINANCEIRO | NOTA FISCAL ELETRÔNICA”. Ressaltamos que a declaração ACADÊMICO | DECLARAÇÃO DE PAGAMENTOS (ANO ANTERIOR) é destinado apenas ao ano anterior e que qualquer solicitação de anos anteriores deve ser realizada através de nota fiscal.
-* Pagamento não identificado ➡️Não é analisado pelo DRA.
-* Solicitação de envio por e-mail ➡️Informar a disponibilidade pelo ambiente.
-
-
-DRA022 - ACADÊMICO | DECLARAÇÃO DE PAGAMENTOS (ANO ATUAL)
-Esta declaração detalha todos os pagamentos realizados no ano atual. O documento não inclui juros e multas. Disponível para ser impresso no ambiente.
-CONTÉM: 
-Informa os dados pessoais e dados acadêmicos gerais do aluno, tais como: matrícula, curso, turno, semestre letivo vigente, disciplinas/módulo atual, período equivalente, quantidade de períodos para a conclusão do curso, tabela de pagamentos realizados. 
-
-
-DESTINADA:
-* Pagamentos realizados no ano anterior.
-* Imposto de renda.
-* Para fins de Informe de rendimentos.
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-
-
-* Solicitação para informar que os pagamentos foram realizados em nome de terceiros ➡️Informar que é o modelo padrão.
-* Solicita alteração de dados ➡️ Informar que é o modelo padrão.
-* Divergência no pagamento ➡️ O mesmo deve discordar do preview informando o ocorrido. O DRA encaminha a solicitação para o financeiro para análise. 
-* Informa que deseja outros anos➡️Solicitar o protocolo “FINANCEIRO | NOTA FISCAL ELETRÔNICA”
-* Pagamento não identificado ➡️Solicitar o protocolo “FINANCEIRO | ANÁLISE DE PAGAMENTO NÃO IDENTIFICADO”
-* Solicitação de envio por e-mail ➡️Informar a disponibilidade pelo ambiente.
-DRA012 - ACADÊMICO | DECLARAÇÃO DE CONCLUSÃO DE CRÉDITOS
-Este documento é uma declaração dirigida aos alunos que concluíram todos os créditos necessários para a graduação.
-CONTÉM: 
-Informa os dados pessoais e dados acadêmicos gerais do aluno, tais como: matrícula, informações sobre o período de início e término do curso, seu reconhecimento, duração, carga horária e a data da Colação de Grau ( que será informada após a participação do(a) aluno(a) na cerimônia ) antes da confirmação de participação a declaração será fornecida sem a data da colação. 
-
-
-DESTINADA:
-* Confirmação de conclusão de todos os créditos do aluno no curso. 
-* Confirmação de presença na colação de grau.
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* Deseja a data de colação de grau ➡️Será informada após a confirmação de presença do aluno (através da ata assinada no ato da colação) no sistema. ( Geralmente até 2 dias úteis após a colação) 
-* Deseja que seja informada a data futura da colação de grau para adiantar a pós graduação (especialização) ➡️Informar a situação ao departamento. 
-* Deseja que seja informada a data futura da colação de grau ➡️ Solicitar a declaração após a colação de grau. Apenas se for o caso de adiantar a especialização informar a situação ao departamento. 
-DRA024 - ACADÊMICO | DECLARAÇÃO DE MATRÍCULA COM CALENDÁRIO DE PROVAS
-Fornece as datas das avaliações programadas para o semestre atual.
-CONTÉM: 
-Informa os dados pessoais e dados acadêmicos gerais do aluno, tais como: matrícula, status do período vigente, curso, turno, disciplinas matriculadas, período equivalente, tabela com as datas de avaliações de cada disciplina.
-
-
-DESTINADA:
-* Informação das datas de avaliações programadas para o semestre atual.
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* Confirmação de presença na prova ➡️Para obter a confirmação de presença na unidade para a realização da prova, você pode solicitar o protocolo 'ACADÊMICO | DECLARAÇÃO DE REALIZAÇÃO DE PROVAS'. É importante destacar que este documento é destinado apenas para provas presenciais e não se aplica a alunos na modalidade EAD
-* Aluno modular que informa não ter notas ➡️Informamos que a declaração para alunos modulares será realizada manualmente. É necessário que o aluno discorde do preview informando que está em branco. O documento será enviado por e-mail.
-DRA028 - ACADÊMICO | DECLARAÇÃO DE MATRÍCULA COM HORÁRIO DE AULA (GRADUAÇÃO)
-Esta declaração informa o horário das disciplinas nas quais o aluno está matriculado no semestre atual. Ressaltamos que para disciplinas realizadas no formato a distância não irá constar horários definidos, devido a flexibilidade da mesma.
-CONTÉM: 
-Informa os dados pessoais e dados acadêmicos gerais do aluno, tais como: matrícula, status do período vigente, curso, disciplinas/módulo atual, período equivalente.
-
-
-DESTINADA:
-* Informar o horário das disciplinas nas quais o aluno está matriculado.
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* Grade/ Quadro de Horário ➡️ ️ Não é analisado pelo DRA.
-DRA004 - ACADÊMICO | DECLARAÇÃO DE PONTUAÇÃO NO VESTIBULAR (Manual) 
-Este documento é destinado a candidatos que, tendo sido aprovados no vestibular, não realizaram a matrícula e desejam utilizar essa aprovação em outra Instituição de Ensino Superior (IES).
-CONTÉM: 
-Informa os dados pessoais e dados acadêmicos gerais do aluno, tais como: ano e período em que foi prestada a prova, curso e notas.
-COMO EMITIR:
-Aberto internamente
-
-
-DESTINADA:
-* Candidatos aprovados que não realizaram a matrícula e desejam utilizar essa aprovação em outra Instituição de Ensino (Vestibular comum e Vestibular Solidário)
-
-
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-
-
-
-
-DRA008 - ACADÊMICO | SOLICITAÇÃO DE TROCA ACADÊMICA PELO AMBIENTE ALUNO
-Este protocolo é gerado automaticamente para os alunos que solicitam a troca acadêmica por meio do menu disponível no ambiente do aluno, dentro do período estabelecido no calendário acadêmico.
-CONTÉM:
-Não é um documento.
-COMO EMITIR:
-Através do ambiente do aluno.
-
-
-DESTINADA:
-* Trocas acadêmicas de turno, unidade, curso e modalidade.
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* trocas de turma ➡️ Não é realizado pelo DRA.
-* Trocas de Modulos ➡️ Não é realizado pelo DRA, entrar em contato com o coordenador.
-* Dispensas ➡️ entrar em contato com o coordenador.[b]
-* cancelamento da solicitação➡️ o aluno solicitar através do canal de atendimento ao aluno.
-* cancelamento da solicitação➡️deve-se alterar o status para “cancelado” não “finalizado” devido ao monitoramento do mesmo.
-* cancelamento da solicitação➡️não pode ser aceito após a troca ser realizada, neste é caso é necessário solicitar novamente a troca para os dados anteriores. 
-* Aluno com o status “pré-inscrito” ➡️será atualizado automaticamente em até um dia, caso a troca tenha sido realizada e após um dia o status não tenha sido alterado a alteração manual para “matriculado” deve ser realizada pela secretaria. 
-* Aluno arrependido da solicitação ➡️ é necessário o aluno solicitar novamente a troca para os dados anteriores. 
-* Alteração do valor da bolsa D-FINAM ➡️ Após a realização da troca a bolsa é lançada automaticamente, em cima do valor do curso, ou seja, caso o curso seja alterado o valor da bolsa também será. Para retornar aos valores anteriores é necessário solicitar a troca para os dados anteriores. 
-* Bolsa Carência 100%➡️ Após a confirmação da troca, o lançamento será realizado pelo departamento de bolsa. O departamento de bolsa informará o lançamento no próprio protocolo de troca.
-* Bolsa Legal ➡️ Após a confirmação é necessário informar ao RH.
-* Bolsa estagiários ➡️ Após a confirmação é necessário informar ao RH.
-* Troca indeferida ➡️ Ressaltamos que no parecer interno são informados os módulos disponíveis no momento da análise de troca. A indicação "não cumpre o pré-requisito" é utilizada para módulos em que o aluno não pode ser inserido por não ter cursado as disciplinas necessárias. A indicação "já cursado" é utilizada para módulos/períodos equivalentes (no ato da troca) em que o aluno é considerado aprovado. 
-* Trocas autorizadas ➡️ Deve-se abrir o protocolo internamente, informando qual departamento autorizou, a unidade, curso e turno de destino (Exemplo: Troca autorizada pelo departamento de Bolsa. Dados de Destino: BS / Administração / Noite) 
-* Alunos com Bolsa 100% (Vestibular Solidário) ➡️Conforme as novas regras válidas a partir de 2025/2, os alunos apenas podem solicitar troca de turno e de unidade. Ressalto que trocas de polo não são mais permitidas.
-* trocas de turma ➡️ Não é analisado pelo DRA.
-DRA014 - ACADÊMICO | SOLICITAÇÃO DE TROCA ACADÊMICA APÓS O PRAZO
-Protocolo para solicitação de trocas acadêmicas pelo ambiente do aluno(a) após o encerramento do prazo estipulado no Calendário Acadêmico. Para realização desse processo, o(a) aluno(a) deve apresentar um documento que comprove a necessidade da troca.
-CONTÉM:
-Não é um documento.
-COMO EMITIR:
-Através do ambiente do aluno.
-
-
-DESTINADA:
-* Trocas acadêmicas de turno, unidade e modalidade para o mesmo curso
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* Abertura do protocolo ➡️ A solicitação do protocolo deve ser feita através do Ambiente do Aluno, na seção Protocolo Online. É importante ressaltar que o processo é diferente da solicitação de trocas dentro no prazo, que é realizado diretamente no menu.
-* Trocas de curso➡️Não são aceitas devido ao fluxo acadêmico.
-* Alunos com Bolsa 100% (Vestibular Solidário) ➡️Conforme as novas regras válidas a partir de 2025/2, os alunos apenas podem solicitar troca de turno e de unidade. Ressalto que trocas de polo não são mais permitidas.
-* Trocas autorizadas ➡️ Deve-se abrir o protocolo internamente, informando qual departamento autorizou, a unidade, curso e turno de destino (Exemplo: Troca autorizada pelo departamento de Bolsa. Dados de Destino: BS / Administração / Noite) 
-* trocas de turma ➡️ Não é realizado pelo DRA.
-DRA082- ACADÊMICO | DECLARAÇÃO DE MATRÍCULA / ENADE
-Documento destinado a estudantes transferidos que necessitam comprovar sua situação no ENADE, caso essa informação não conste no Histórico de Transferência.
-CONTÉM: 
-Informa os dados pessoais e dados acadêmicos gerais do aluno, tais como: matrícula, curso, turno, ano de ingresso na instituição com a situação do ENADE.  
-COMO EMITIR:
-Aberto internamente
-
-
-DESTINADA:
-* estudantes transferidos que não consta situação de ENADE no Histórico de Transferência.
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* Alunos que receberam o histórico de transferência sem a informação de enade ➡️ Informar ao departamento responsável para a abertura interna do protocolo.
-DRA013/DRA018 - ATIVIDADE COMPLEMENTAR
-Lançamento das horas de atividades complementares.
-CONTÉM: 
-Não é um documento
-COMO EMITIR:
-Ambiente do aluno
-
-
-DESTINADA:
-* Atividades complementares
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* aluno com matrícula anterior que deseja aproveitar as atividades complementares novamente ➡️ Para o aproveitamento de atividades realizadas em outra instituição de ensino superior ou na Unisuam, solicitar o protocolo "RELACIONAMENTO | TRANSFERÊNCIA DE ATIVIDADE COMPLEMENTAR"
-* Modelo de RAC[c]
-* Solicita urgência na análise das horas complementares ➡️ Deve apresentar o comprovante de urgência. 
-* Atividades realizadas internamente ➡️ As participações em eventos online realizados pela Extensão/Pra Quem Faz/Pólen, bem como nas lives oferecidas oficialmente pelos cursos, já estão sendo registradas no sistema. Os alunos que participarem dessas atividades terão as suas horas registradas pelo próprio setor responsável
-* Pesquisa e Prática Pedagógica  ➡️ As atividades de Pesquisa e Prática Pedagógica não valem como atividades complementares ou vice‐versa. Cada uma tem a sua validade.
-* graduação anterior em outra IES ➡️ Solicitar o protocolo de aproveitamento de “RELACIONAMENTO | APROVEITAMENTO DE DISCIPLINA EXTERNA COMO ATIVIDADE COMPLEMENTAR”, informar a disciplina desejada que serão analisadas para aproveitamento.
-* Trabalho nas eleições ➡️ Para que a participação possa ser aproveitada como horas complementares, é preciso aguardar os dias do evento e a realização do mesmo para fazer a apresentação da declaração de participação, que é entregue no final de cada turno. 
-* Aproveitamento de disciplinas concluídas em uma graduação anterior ➡️ solicitar o protocolo “o protocolo de aproveitamento de RELACIONAMENTO | APROVEITAMENTO DE DISCIPLINA INTERNA COMO ATIVIDADE COMPLEMENTAR” informar a disciplina desejada que serão analisadas para aproveitamento.
-DRA010- ACADÊMICO | HISTÓRICO ESCOLAR PARCIAL DO CURSO DE GRADUAÇÃO
- emissão do Histórico Parcial do aluno(a) de graduação
-CONTÉM: 
-O documento inclui informações sobre: dados pessoais, forma de ingresso, período de ingresso, disciplinas em curso, aprovadas e dispensadas (quando aplicável é informado a IES onde foi cursada), carga horária, grau, Coeficiente de Rendimento (CR) por período e CR global, Enade ingressante, atividades complementares, assinatura digital, QR Code. 
-
-
-COMO EMITIR:
-Solicitação através do ambiente do aluno e após o pagamento de emissão. 
-
-
-DESTINADA:
-* Entrega para estágios
-* Entrega ao trabalho
-* Para realização de cursos
-* Quando o histórico de simples conferência não é aceito devido a necessidade da assinatura digital
-* Para obter dispensas em outra faculdade que fazem simultânea. 
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* solicitam para transferência para outra IES ➡️ Solicitação de Análise de Encerramento.
-* disciplina dispensadas fora do cálculo do C.R ➡️disciplinas dispensadas não são computadas no cálculo do CR
-* disciplinas reprovadas ➡️ não são informadas. 
-* Disciplinas cursadas em outro curso (troca acadêmica ou cursada em outra matrícula) ➡️ são informadas no enriquecimento curricular
-* curso sem reconhecimento ➡️ será aberto o protocolo “DECLARAÇÃO PARA CURSOS SEM INTEGRALIZAÇÃO CURRICULAR” internamente e disponibilizado junto a entrega do histórico. 
-* Aluno com o status “formado” ➡️ deve aguardar a documentação final.
-* Aluno com o status “trancado” ➡️o documento é emitido normalmente.
-* Aluno com o status “Não matriculado” ➡️o documento é emitido normalmente.
-* Aluno com o status “transferido” ➡️é necessário o aluno confirmar se deseja realmente o histórico parcial pois o mesmo não é para fins de transferência. 
-* Aluno com o status “cancelado” ➡️ é necessario abrir o ticket para a disponibilização do histórico de simples conferência. 
-* Aluno com o status “jubilado” ➡️o documento é emitido normalmente.
-* aluno sem acesso ao ambiente ➡️É necessario abrir o ticket para a disponibilização do histórico de simples conferência. 
-DRA096 - ACADÊMICO | HISTÓRICO PARA FINS DE TRANSFERÊNCIA
-Emissão do Histórico Escolar válido para Transferência do aluno para outra Instituição de Ensino Superior.
-CONTÉM: 
-O documento inclui informações sobre: dados pessoais, forma de ingresso, período de ingresso, disciplinas em curso, aprovadas e dispensadas (quando aplicável é informado a IES onde foi cursada), carga horária, grau, Coeficiente de Rendimento (CR) por período e CR global, Enade ingressante, atividades complementares, assinatura digital, QR Code. 
-COMO EMITIR:
-Aberto automaticamente após o deferimento do protocolo de transferência.
-
-
-DESTINADA:
-* Fins de Transferência para outra IES.
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* Não obteve nenhuma aprovação (aluno sem aproveitamento de disciplina)  ➡️ O aluno deve abrir o protocolo “Financeiro Devolução de Importância Paga” e informar os dados bancários no esclarecimento da solicitação.
-* curso sem reconhecimento ➡️ será aberto o protocolo “DECLARAÇÃO PARA CURSOS SEM INTEGRALIZAÇÃO CURRICULAR” internamente e disponibilizado junto a entrega do histórico. 
-DRA114 - ACADÊMICO | DECLARAÇÃO DE AUTENTICIDADE DE DIPLOMAS
-Autêntica as informações do diploma. 
-CONTÉM: 
-Informa os dados pessoais e dados acadêmicos gerais do aluno, tais como: matrícula, curso, reconhecimento do curso, data da colação de grau, dados de expedição do diploma, informações de credenciamento da instituição, QRCode.
-COMO EMITIR:
-Através do ambiente do aluno
-
-
-DESTINADA:
-* autenticação do diploma expedido.
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* O aluno informa que a documentação final não abre ➡️verificar através do link (https://www.unisuam.edu.br/diploma-online/) se realmente não está abrindo. Caso não abra informar ao departamento. 
-* O aluno informa que a documentação final está com erro ➡️verificar através do link (https://www.unisuam.edu.br/diploma-online/) se realmente está com erro. Caso realmente esteja errado informar ao departamento. 
-* Documento com dados faltando (em branco) ➡️ informar ao departamento. 
-
-
-DRA079 - ACADÊMICO | DECLARAÇÃO DE REALIZAÇÃO DE ESTAGIO/ENFERMAGEM
-Declaração para os alunos do curso de Enfermagem que estão atualmente matriculados no Estágio Curricular.
-CONTÉM: 
-Informa os dados pessoais e dados acadêmicos gerais do aluno, tais como: matrícula, curso, turno, status do período vigente, período que está cursando, nome da disciplina obrigatória, data de início e data previsão de conclusão da mesma, dia, turno e local da realização do estágio.
-COMO EMITIR:
-Através do ambiente do aluno.
-
-
-DESTINADA:
-* Confirmação de realização de estágio obrigatório.
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* Abertura interna do protocolo ➡️É necessário abrir o protocolo no departamento da coordenação “COORDENAÇÃO DO CURSO DE ENFERMAGEM”. 
-* Disponibilização do documento ➡️ será disponibilizado para o e-mail cadastrado no sistema. 
-
-
-DRA020 - ACADÊMICO | DECLARAÇÃO DE HORÁRIO DE ESTÁGIO DE PSICOLOGIA
-Esta declaração destina-se aos alunos do curso de Psicologia que necessitam de um documento que contenha o horário de realização do estágio.
-CONTÉM: 
-Informa os dados pessoais e dados acadêmicos gerais do aluno, tais como: matrícula, curso, turno, status do período vigente, período que está cursando, nome da disciplina obrigatória, carga horária da disciplina e carga horária total da estrutura curricular.
-COMO EMITIR:
-Através do ambiente do aluno
-
-
-DESTINADA:
-* Comprovação da carga horária de estágio. 
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* Abertura interna do protocolo ➡️É necessário abrir o protocolo no departamento da coordenação “COORDENAÇÃO DO CURSO DE PSICOLOGIA”. 
-* Disponibilização do documento ➡️ será disponibilizado para o e-mail cadastrado no sistema. 
-DRA135 - ACADÊMICO | DOCUMENTOS FINAIS (ANÁLISE PRÉVIA PARA EMISSÃO/REEMISSÃO DE HISTÓRICO FINAL E/OU DIPLOMA)
-Solicitação de documentação final, com a abertura do protocolo correto de acordo com a situação do aluno.
-CONTÉM: 
-Não é um documento.
-COMO EMITIR:
-Através do ambiente do aluno, devendo inserir um documento de identificação atualizado. 
-
-
-DESTINADA:
-* Abertura correta dos protocolos solicitados
-* documentação final de 1º via com ou sem ônus 
-* documentação final de 2º via com ou sem ônus
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* Abertura interna de protocolo➡️ É necessário solicitar um documento atualizado. No protocolo, informe todos os dados que você conseguir da época em que o aluno estava matriculado, como curso, matrícula e nome completo. O nome é especialmente importante, pois é comum que haja mudanças, principalmente para mulheres, e qualquer divergência pode impedir a localização do cadastro no sistema antigo.
-* Aluno jubilado ➡️ Para que possamos solicitar o protocolo em nome do aluno, é preciso verificar se ele realmente concluiu todos os créditos. É importante fazer essa checagem, pois, apesar de alguns alunos jubilados terem concluído a formação, pode haver casos de outros que não finalizaram todos os créditos obrigatórios.
-DRA043 - COLAÇÃO ANTECIPADA[d]
-Colação de grau antecipada, é destinada a todos(as) que precisam Colar Grau antes da data prevista para a Colação Regular.
-CONTÉM: 
-Não é um documento
-COMO EMITIR:
-Através do ambiente do aluno
-
-
-DESTINADA:
-* x
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* comprovação de necessidade para a colação de grau antecipada ➡️É necessário que, na abertura do protocolo, seja anexado um documento que comprove essa necessidade. A lista de documentos válidos é informada na Agenda de Colação de Grau.
-* data para colação de grau antecipada ➡️ é informada previamente na Agenda de Colação de Grau ao final de todos os semestres disponível na intranet (https://intranet.unisuam.edu.br/intranetv2/index.php?option=com_content&view=category&id=167&Itemid=276)
-DRA069 - COLAÇÃO REGULAR
-é destinada a todos(as) que concluíram os créditos obrigatórios. 
-
-
-CONTÉM: 
-Não é um documento
-COMO EMITIR:
-Através do ambiente do aluno
-
-
-DESTINADA:
-* x
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* data para colação de grau regular ➡️ é informada previamente na Agenda de Colação de Grau ao final de todos os semestres disponível na intranet (https://intranet.unisuam.edu.br/intranetv2/index.php?option=com_content&view=category&id=167&Itemid=276)
-* 
-
-DRA003 - COLAÇÃO ESPECIAL
-é destinada a todos(as) que concluíram os créditos obrigatórios. [e]
-
-
-CONTÉM: 
-Não é um documento
-COMO EMITIR:
-Através do ambiente do aluno
-
-
-DESTINADA:
-* x
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* data para colação de grau especial ➡️ é informada previamente na Agenda de Colação de Grau ao final de todos os semestres disponível na intranet (https://intranet.unisuam.edu.br/intranetv2/index.php?option=com_content&view=category&id=167&Itemid=276)
-
-
-DRA045 - ANÁLISE DOCUMENTAL DE PROVÁVEL CONCLUINTE
-O sistema gera automaticamente este protocolo para analisar toda a documentação do(a) aluno(a) matriculado no último período. Ele detalha todas as pendências que poderiam impedir a Colação de Grau.
-CONTÉM: 
-Não é um documento.
-COMO EMITIR:
-Aberto internamente.
-
-
-DESTINADA:
-* Protocolo gerado para analisar toda a documentação do(a) aluno(a) matriculado no último período onde são informadas todas as pendências que poderiam impedir a Colação de Grau.
-
-
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* entrega da exigência ➡️Os documentos devem ser entregues pelo protocolo "Relacionamento I Entrega de Documentação em Exigência". Após inserir os arquivos no SAGA e finalizar o protocolo de exigência, é necessário retornar ao protocolo de análise de provável concluinte e alterar seu status para "aguardando atendimento". Isso fará com que o protocolo volte a ser exibido no relatório para a devida análise.
-* Documento ilegível ➡️ Caso a leitura dos dados principais do documento não seja possível, a solicitação deve ser indeferida. Para dar continuidade, é preciso solicitar ao aluno que envie uma nova cópia do documento, desta vez com as informações claras e visíveis.
-* Caso tenha sido realizada a entrega e protocolo ainda não tenha sido atendido ➡️ Verifique se o protocolo de análise documental voltou para o status "aguardando atendimento". Se ainda não estiver nesse status, é necessário avisar o setor de relacionamento para que eles façam a alteração.Essa ação é fundamental para que o protocolo possa ser analisado.Caso esteja com o status correto, favor aguardar o prazo. 
-* Solicitação de urgência ➡️solicitar o comprovante de urgência e após a entrega informar ao departamento.
-
-
-DRA031 - ACADÊMICO | CÓPIA DE DOCUMENTOS
-Este protocolo destina-se à solicitação de cópias de documentos entregues no ato da matrícula.
-CONTÉM: 
-Não é um documento.
-COMO EMITIR:
-Através do ambiente do aluno
-
-
-DESTINADA:
-* Entrega da cópia dos documentos pessoais e de ensino médio entregues para realizar a matrícula.
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* documentos entregues na matrícula do solidário ➡️ Documentação Pessoal é entregue 
-* documentação de pós graduação ➡️
-* documentação de mestrado[f]
-* entrega dos documentos ➡️Os documentos localizados serão enviados por e-mail
-* Caso não seja encontrada a cópia ➡️ é realizada a busca na pasta física, caso seja encontrado os documentos originais será aberto o protocolo de devolução de documentos. 
-* solicitação de cópia de documentos finais ➡️não são enviadas cópias de documentos finais ou parciais.
-
-
-DRA006 - ACADÊMICO | DEVOLUÇÃO DE DOCUMENTOS
-Este protocolo é direcionado para a devolução de documentos relacionados a matrículas antigas que possam ter sido retidos na pasta do(a) aluno(a), ou para alunos que não retiraram o histórico escolar final após a colação e desejam uma avaliação das condições do documento para liberação. Ressaltamos que nem todos os documentos é obrigatório realizar a guarda permanente, que certos documentos há um tempo limite de acordo com a Tabela de Temporalidade e Destinação
-CONTÉM: 
-Não é um documento.
-COMO EMITIR:
-Através do ambiente do aluno
-
-
-DESTINADA:
-* entrega na unidade dos documentos pessoais ou acadêmicos que possam ter sido retidos no ato da matrícula. 
-* entrega na unidade do histórico final emitido que não foi retirado.
-* entrega na unidade do diploma emitido que não foi retirado.
-
-
-DÚVIDAS COMUNS ➡️ ORIENTAÇÃO 
-* alunos a partir de 2013➡️ Não há pasta física devido a solicitação do documento apenas para escaneamento e inserimento no dossiê acadêmico digital com a devolução dos mesmo no ato da matrícula, desta forma não há documentação para ser devolvida.
-
-
-
-
-[a]verificar se são para as duas
-[b]como orientar
-[c]tem como colocar arquivo na IA ?
-[d]verificar se ainda tem alguma duvida recorrente
-[e]ver o conceito da colação especial depois
-[f]ver como orientar depois
-`;
+const REPORT_FEEDBACK_FILE_NAME = "Relatorio_Feedback_IA.txt";
+// cria um conhecimento não apagavel economiza recursos
+const EMBEDDINGS_FILE_NAME = "embeddings_db.json";
 
 
 /***************************************************
- * 🔧 FUNÇÕES AUXILIARES
+ *  FUNÇÕES AUXILIARES
  ***************************************************/
 
-/**
- * Divide um texto longo em pedaços menores (chunks).
- * @param {string} text O texto a ser dividido.
- * @param {number} size O tamanho máximo de cada pedaço.
- * @returns {string[]} Um array com os pedaços de texto.
- */
-function chunkText(text, size = 1500) {
+function chunkText(text, maxLength = 1500) {
   const chunks = [];
-  for (let i = 0; i < text.length; i += size) {
-    chunks.push(text.slice(i, i + size));
+  // Divide primeiro por parágrafos (duas quebras de linha)
+  let paragraphs = text.split(/\n\s*\n/);
+  
+  let currentChunk = "";
+  
+  for (const paragraph of paragraphs) {
+    // Se o parágrafo + o chunk atual couberem, junta
+    if ((currentChunk.length + paragraph.length) < maxLength) {
+      currentChunk += paragraph + "\n\n";
+    } else {
+      // Se não couber, salva o atual e começa um novo
+      if (currentChunk.length > 0) chunks.push(currentChunk.trim());
+      currentChunk = paragraph + "\n\n";
+    }
   }
+  // Adiciona o que sobrou
+  if (currentChunk.length > 0) chunks.push(currentChunk.trim());
+  
   return chunks;
 }
 
-/**
- * Calcula a similaridade de cosseno entre dois vetores.
- * @param {number[]} a Vetor A.
- * @param {number[]} b Vetor B.
- * @returns {number} A similaridade (entre -1 e 1).
- */
 function cosineSimilarity(a, b) {
   let dot = 0, normA = 0, normB = 0;
+  if (!a || !b || a.length !== b.length) return 0;
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
     normA += a[i] ** 2;
     normB += b[i] ** 2;
   }
+  if (normA === 0 || normB === 0) return 0;
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
+function fetchWithRetry(url, options, maxRetries = 3) {
+  let lastError = null;
+  for (let i = 0; i < maxRetries; i++) {
+    let response; // Declarado aqui para estar no escopo do try/catch
+    try {
+      response = UrlFetchApp.fetch(url, options);
+      const responseCode = response.getResponseCode();
+      
+      
+      const rawResponse = response.getContentText();
+
+      // Se for sucesso, PARSEAMOS o JSON e retornamos
+      if (responseCode >= 200 && responseCode < 300) {
+        try {
+          
+          return JSON.parse(rawResponse);
+        } catch (parseError) {
+          // Se a API der 200, mas enviar um JSON inválido
+          Logger.log(`Tentativa ${i + 1} falhou no PARSE do JSON: ${parseError}. Resposta: ${rawResponse}`);
+          lastError = parseError;
+          // Continua para a próxima tentativa
+        }
+      }
+
+      // Se for um erro (não 200-299), o código abaixo executa
+      Logger.log(`Tentativa ${i + 1}/${maxRetries} falhou. Código: ${responseCode}. Resposta: ${rawResponse}`);
+      
+      if (responseCode === 429 || responseCode === 503 || rawResponse.toLowerCase().includes("overloaded")) {
+        lastError = new Error(`Erro recuperável (${responseCode}): ${rawResponse}`);
+        const sleepTime = Math.pow(2, i) * 1000 + (Math.random() * 1000); 
+        Utilities.sleep(sleepTime);
+      } else {
+        lastError = new Error(`Erro não recuperável (${responseCode}): ${rawResponse}`);
+        break; 
+      }
+
+    } catch (e) {
+      // Captura erros de rede, DNS, etc.
+      lastError = e;
+      Logger.log(`Tentativa ${i + 1}/${maxRetries} falhou com exceção: ${e}`);
+      const sleepTime = Math.pow(2, i) * 1000 + (Math.random() * 1000); 
+      Utilities.sleep(sleepTime);
+    }
+  }
+  
+  Logger.log("Falha em todas as tentativas de fetch.");
+  throw lastError || new Error("Falha ao buscar a API após várias tentativas.");
+}
+
+
 /***************************************************
- * 🧠 EMBEDDINGS (VETORIZAÇÃO DE TEXTO)
+ *  EMBEDDINGS (VETORIZAÇÃO DE TEXTO)
  ***************************************************/
 
-/**
- * Gera o embedding (vetor numérico) para um dado texto usando a API do Gemini.
- * @param {string} text O texto para gerar o embedding.
- * @returns {number[]} O vetor de embedding ou um array vazio em caso de erro.
- */
 function generateEmbedding(text) {
   const url = `https://generativelanguage.googleapis.com/v1beta/${EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`;
-
   const payload = {
     content: {
       parts: [{ text: text }]
     }
   };
-
   const options = {
     method: "POST",
     contentType: "application/json",
     payload: JSON.stringify(payload),
-    muteHttpExceptions: true
+    muteHttpExceptions: true 
   };
-
+  
   try {
-    const response = UrlFetchApp.fetch(url, options);
-    const raw = response.getContentText();
-    const data = JSON.parse(raw);
+    // fetchWithRetry AGORA RETORNA O JSON (objeto 'data') DIRETAMENTE.
+    // não precisamo mais chamar .getContentText() ou JSON.parse().
+    const data = fetchWithRetry(url, options);
 
+    // Se o JSON retornado tiver um erro, logamos.
     if (data.error) {
-      Logger.log(`❌ Erro na API Embedding: ${data.error.message}`);
-      return [];
+      Logger.log(`❌ Erro na API Embedding (JSON): ${data.error.message}`);
+      throw new Error(data.error.message); // <--- Lança o erro para o tratador principal
     }
     
+    // Retornamos os valores do embedding diretamente.
     return data?.embedding?.values || [];
+
   } catch (e) {
-    Logger.log("❌ Erro ao gerar embedding: " + e);
-    return [];
+    // Se fetchWithRetry falhar (ex: 400, 500), o erro será pego aqui.
+    Logger.log("❌ Erro ao gerar embedding (após retentativas): " + e);
+    throw e;
   }
 }
 
 /***************************************************
- * 🤖 LÓGICA PRINCIPAL DO CHAT
+ *  LÓGICA DO GOOGLE DRIVE
+ ***************************************************/
+
+function getKnowledgeFolder() {
+  try {
+    const folders = DriveApp.getFoldersByName(DRIVE_FOLDER_NAME);
+    if (folders.hasNext()) {
+      return folders.next();
+    } else {
+      Logger.log(`❌ Pasta não encontrada: ${DRIVE_FOLDER_NAME}`);
+      return null;
+    }
+  } catch (e) {
+    Logger.log(`❌ Erro ao acessar o Drive: ${e}. Verifique as permissões.`);
+    return null;
+  }
+}
+
+function getImageData(fileName) {
+  if (!fileName) {
+    Logger.log("❌ Tentativa de buscar imagem com nome de arquivo nulo.");
+    return null;
+  }
+  try {
+    const folder = getKnowledgeFolder(); 
+    if (!folder) {
+      Logger.log(`❌ Não foi possível buscar a imagem "${fileName}", pasta de conhecimento não encontrada.`);
+      return null;
+    }
+    
+    const files = folder.getFilesByName(fileName);
+    if (files.hasNext()) {
+      const file = files.next();
+      const blob = file.getBlob();
+      const contentType = blob.getContentType();
+      const base64 = Utilities.base64Encode(blob.getBytes());
+      
+      Logger.log(`✅ Imagem "${fileName}" encontrada e codificada.`);
+      return { base64: base64, contentType: contentType };
+    } else {
+      Logger.log(`⚠️ ERRO CRÍTICO: Imagem "${fileName}" NÃO encontrada na pasta "${DRIVE_FOLDER_NAME}". Verifique o nome do arquivo.`);
+      return null;
+    }
+  } catch (e) {
+    Logger.log(`❌ Erro ao buscar/codificar a imagem "${fileName}": ${e}`);
+    return null;
+  }
+}
+
+
+function getKnowledgeBaseAndTimestamp() {
+  const cache = CacheService.getScriptCache();
+  const folder = getKnowledgeFolder();
+  if (!folder) {
+    return { text: null, timestamp: null };
+  }
+  const files = folder.getFilesByName(KNOWLEDGE_FILE_NAME);
+  if (!files.hasNext()) {
+    Logger.log(`❌ Arquivo não encontrado: ${KNOWLEDGE_FILE_NAME} na pasta ${DRIVE_FOLDER_NAME}`);
+    return { text: null, timestamp: null };
+  }
+  const file = files.next();
+  const fileLastUpdated = file.getLastUpdated().toISOString();
+  const cachedLastUpdated = cache.get('knowledge_base_last_updated');
+  
+  if (fileLastUpdated !== cachedLastUpdated) {
+    Logger.log("🔄 Base de conhecimento alterada. Recarregando do Drive e atualizando o cache...");
+    const fileContent = file.getBlob().getDataAsString('UTF-8');
+    cache.put('knowledge_base_text', fileContent, 21600);
+    cache.put('knowledge_base_last_updated', fileLastUpdated, 21600);
+    return { text: fileContent, timestamp: fileLastUpdated };
+  } else {
+    const cachedText = cache.get('knowledge_base_text');
+    return { text: cachedText, timestamp: cachedLastUpdated };
+  }
+}
+
+function registrarPerguntaSemResposta(pergunta, historico, respostaIA) {
+  try {
+    const folder = getKnowledgeFolder();
+    if (!folder) {
+      Logger.log("❌ Não foi possível registrar a pergunta. Pasta de conhecimento não encontrada.");
+      return;
+    }
+    const reportFiles = folder.getFilesByName(REPORT_FILE_NAME);
+    
+    let historicoFormatado = "Nenhum histórico anterior.\n";
+    if (historico && historico.length > 0) {
+      historicoFormatado = historico
+        .map(item => `${item.role === 'user' ? 'USUÁRIO' : 'IA'}: ${item.parts[0].text}`)
+        .join('\n') + '\n';
+    }
+
+    const newEntry = `
+    --- REGISTRO: ${new Date().toLocaleString('pt-BR')} ---
+    HISTÓRICO DA CONVERSA:
+    ${historicoFormatado}
+    PERGUNTA ATUAL: ${pergunta}
+    RESPOSTA DA IA (FALHA): ${respostaIA}
+    --- FIM REGISTRO ---\n
+    `;
+    
+    let file;
+    if (reportFiles.hasNext()) {
+      file = reportFiles.next();
+      const currentContent = file.getBlob().getDataAsString('UTF-8');
+      file.setContent(currentContent + newEntry);
+    } else {
+      file = folder.createFile(REPORT_FILE_NAME, newEntry, 'text/plain');
+    }
+    Logger.log(`📝 Pergunta registrada no relatório: ${REPORT_FILE_NAME}`);
+  } catch (e) {
+    Logger.log(`❌ Erro ao registrar pergunta no relatório: ${e}`);
+  }
+}
+
+
+/**
+ * Registra o feedback do usuário (like/dislike) em um arquivo de log separado.
+ */
+function registrarFeedback(pergunta, resposta, feedback) {
+  try {
+    
+    // Se o feedback for 'like', encerra a função e não salva nada.
+    if (feedback === 'like') {
+      Logger.log("ℹ️ Feedback 'like' recebido. Nenhuma ação necessária (não será salvo).");
+      return; 
+    }
+    // ----------------------
+
+    const folder = getKnowledgeFolder();
+    if (!folder) {
+      Logger.log("❌ Não foi possível registrar o feedback. Pasta de conhecimento não encontrada.");
+      return;
+    }
+    const reportFiles = folder.getFilesByName(REPORT_FEEDBACK_FILE_NAME);
+    
+    const feedbackSimbolo = '👎'; 
+
+    const newEntry = `
+--- FEEDBACK: ${new Date().toLocaleString('pt-BR')} ---
+FEEDBACK: ${feedbackSimbolo}
+PERGUNTA: ${pergunta}
+RESPOSTA: ${resposta}
+--- FIM REGISTRO ---\n
+`;
+    
+    let file;
+    if (reportFiles.hasNext()) {
+      file = reportFiles.next();
+      const currentContent = file.getBlob().getDataAsString('UTF-8');
+      file.setContent(currentContent + newEntry);
+    } else {
+      file = folder.createFile(REPORT_FEEDBACK_FILE_NAME, newEntry, 'text/plain');
+    }
+    Logger.log(`📝 Feedback (${feedbackSimbolo}) registrado no relatório: ${REPORT_FEEDBACK_FILE_NAME}`);
+  } catch (e) {
+    Logger.log(`❌ Erro ao registrar feedback no relatório: ${e}`);
+  }
+}
+
+/***************************************************
+ * LÓGICA PRINCIPAL DO CHAT
  ***************************************************/
 
 /**
- * Encontra os pedaços de texto mais relevantes da base de conhecimento para uma pergunta.
- * @param {string} pergunta A pergunta do usuário.
- * @returns {string} O texto de contexto mais relevante.
+ * Gerencia a leitura e escrita dos embeddings em um arquivo JSON no Drive.
+ * Se o arquivo 'conhecimento.txt' mudou, ele regenera tudo e salva.
+ * Se não mudou, ele lê direto do JSON (Zero custo de API).
  */
-function encontrarContextoRelevante(pergunta) {
-  const cache = CacheService.getScriptCache();
-  
-  // 1. Gera o embedding da pergunta
-  const perguntaEmbedding = generateEmbedding(pergunta);
-  if (perguntaEmbedding.length === 0) {
-    return "Erro ao analisar a pergunta.";
+function recuperarOuGerarEmbeddings(folder, fullText, fileTimestamp) {
+  // 1. Tenta encontrar o arquivo JSON de embeddings
+  const files = folder.getFilesByName(EMBEDDINGS_FILE_NAME);
+  let dbEmbeddings = null;
+  let precisaRegerar = false;
+
+  if (files.hasNext()) {
+    const file = files.next();
+    try {
+      const jsonContent = file.getBlob().getDataAsString();
+      const data = JSON.parse(jsonContent);
+      
+      // Verifica se a versão salva é compatível com o arquivo de texto atual
+      if (data.timestamp === fileTimestamp && data.chunks && data.chunks.length > 0) {
+        Logger.log("Usando embeddings cacheados do Drive (Rápido!)");
+        return data.chunks; // RETORNO RÁPIDO
+      } else {
+        Logger.log("🔄 O arquivo de texto mudou. É necessário regenerar os embeddings...");
+        precisaRegerar = true;
+        // Opcional: Deletar o antigo para não acumular lixo
+        file.setTrashed(true);
+      }
+    } catch (e) {
+      Logger.log("⚠️ Erro ao ler JSON de embeddings (corrompido?). Regenerando...");
+      precisaRegerar = true;
+    }
+  } else {
+    Logger.log("🆕 Nenhum arquivo de embeddings encontrado. Gerando pela primeira vez...");
+    precisaRegerar = true;
   }
 
-  // 2. Divide a base de texto em pedaços
-  const chunks = chunkText(BASE_TEXT);
-  let melhorChunk = "";
-  let maiorSimilaridade = -1;
+  // 2. Se chegou aqui, precisa gerar novos embeddings (Lento, mas só acontece 1 vez)
+  if (precisaRegerar) {
+    const chunks = chunkText(fullText); 
+    const baseDeDados = [];
 
-  // 3. Itera sobre cada pedaço para encontrar o mais similar
-  chunks.forEach((chunk, index) => {
-    const cacheKey = `embedding_chunk_${index}`;
-    let chunkEmbedding = JSON.parse(cache.get(cacheKey));
+    Logger.log(`🔨 Iniciando geração de embeddings para ${chunks.length} pedaços de texto...`);
 
-    // Se não estiver no cache, gera e salva
-    if (!chunkEmbedding) {
-      Logger.log(`Gerando embedding para o chunk ${index}...`);
-      chunkEmbedding = generateEmbedding(chunk);
-      if (chunkEmbedding.length > 0) {
-        cache.put(cacheKey, JSON.stringify(chunkEmbedding), 21600); // Salva por 6 horas
+    for (let i = 0; i < chunks.length; i++) {
+      // Pequena pausa para evitar rate limit durante a geração em massa
+      Utilities.sleep(1500); 
+      
+      const vetor = generateEmbedding(chunks[i]);
+      
+      // Só salva se o vetor for válido
+      if (vetor && vetor.length > 0) {
+        baseDeDados.push({
+          text: chunks[i],
+          embedding: vetor
+        });
+      } else {
+         Logger.log(`⚠️ Falha ao gerar vetor para o chunk ${i}. Ignorando.`);
       }
     }
 
-    if (chunkEmbedding && chunkEmbedding.length > 0) {
-      const similaridade = cosineSimilarity(perguntaEmbedding, chunkEmbedding);
-      if (similaridade > maiorSimilaridade) {
-        maiorSimilaridade = similaridade;
-        melhorChunk = chunk;
-      }
+    // 3. Salva o resultado no Drive para o futuro
+    if (baseDeDados.length > 0) {
+      const payload = {
+        timestamp: fileTimestamp, // A "assinatura" da versão
+        chunks: baseDeDados
+      };
+      folder.createFile(EMBEDDINGS_FILE_NAME, JSON.stringify(payload), "application/json");
+      Logger.log("💾 Novos embeddings salvos no Drive com sucesso!");
     }
+    
+    return baseDeDados;
+  }
+}
+
+function encontrarContextoRelevante(pergunta) {
+  // 1. Gera o embedding da PERGUNTA (Isso sempre é necessário)
+  const perguntaEmbedding = generateEmbedding(pergunta);
+  if (!perguntaEmbedding || perguntaEmbedding.length === 0) {
+    return { contextos: ["Erro ao analisar a pergunta (Falha no Embedding)."], maiorSimilaridade: -1 };
+  }
+  
+  // 2. Carrega a base de conhecimento
+  const knowledgeData = getKnowledgeBaseAndTimestamp();
+  if (!knowledgeData.text) {
+    return { contextos: ["Erro: Base de conhecimento não encontrada."], maiorSimilaridade: -1 };
+  }
+
+  const folder = getKnowledgeFolder();
+  if (!folder) {
+     return { contextos: ["Erro: Pasta do Drive não acessível."], maiorSimilaridade: -1 };
+  }
+
+  // MÁGICA: Busca os chunks já prontos do Drive (ou gera se for novo)
+  // Removemos a lógica antiga de CacheService daqui e delegamos para a nova função
+  const chunksComVector = recuperarOuGerarEmbeddings(folder, knowledgeData.text, knowledgeData.timestamp);
+
+  if (!chunksComVector || chunksComVector.length === 0) {
+     return { contextos: ["Erro: Não foi possível gerar ou recuperar os embeddings do texto."], maiorSimilaridade: -1 };
+  }
+
+  // 4. Calcula a similaridade (Matemática pura, muito rápido localmente)
+  const TOP_K = 3; // provalvlemente se colocar em supeior de 3 a api vai quebrar em teste inferiores o limite era alcançado  resultando em erro da resposta da api 
+  const SIMILARITY_THRESHOLD_FOR_RETRIEVAL = 0.3; 
+  
+  const allSimilarities = chunksComVector.map(item => {
+    return {
+      chunk: item.text,
+      similaridade: cosineSimilarity(perguntaEmbedding, item.embedding)
+    };
   });
 
-  Logger.log(`Melhor similaridade encontrada: ${maiorSimilaridade}`);
-  return melhorChunk;
+  // 5. Ordena e filtra
+  allSimilarities.sort((a, b) => b.similaridade - a.similaridade);
+  
+  const topChunks = allSimilarities
+    .filter(item => item.similaridade >= SIMILARITY_THRESHOLD_FOR_RETRIEVAL)
+    .slice(0, TOP_K);
+
+  if (topChunks.length === 0) {
+      const maiorSim = allSimilarities.length > 0 ? allSimilarities[0].similaridade : -1;
+      return { contextos: [], maiorSimilaridade: maiorSim };
+  }
+  
+  const contextos = topChunks.map(item => item.chunk);
+  const maiorSimilaridade = topChunks[0].similaridade;
+  
+  Logger.log(`Retornando ${topChunks.length} chunks. Maior similaridade: ${maiorSimilaridade}`);
+  return { contextos: contextos, maiorSimilaridade: maiorSimilaridade };
 }
 
-/**
- * Gera uma resposta para a pergunta do usuário usando o contexto encontrado.
- * @param {string} pergunta A pergunta do usuário.
- * @returns {string} A resposta gerada pela IA.
- */
-function responderPergunta(pergunta) {
-  // Encontra o contexto relevante na base de conhecimento
-  const contexto = encontrarContextoRelevante(pergunta);
+
+function responderPergunta(pergunta, historico, modo, senhaRecebida) {
   
-  if (contexto.includes("Erro")) {
-    return contexto;
-  }
-  if (!contexto) {
-     return "Não foi possível encontrar informações relevantes para responder à sua pergunta.";
+  // VERIFICAÇÃO DE SEGURANÇA IMEDIATA no cliente a autenticação e feita no beckend para evitar manipulação do front 
+  if (modo === 'Ensinar') {
+    if (senhaRecebida !== SENHA_MESTRA) {
+      Logger.log("⛔ Bloqueio de Segurança: Tentativa de usar modo Ensinar sem senha.");
+      return "⛔ ACESSO NEGADO: Você não tem permissão para usar o modo Ensinar.";
+    }
   }
 
-  // Monta o prompt para a IA
-  const prompt = `
-    Você é um assistente virtual especialista nos procedimentos do DRA.
-    Use estritamente as informações do CONTEXTO abaixo para responder à PERGUNTA.
-    Não invente informações. Se a resposta não estiver no contexto, diga "Não encontrei essa informação no documento.".
-    Seja direto e claro na sua resposta.
-
-    ---
-    CONTEXTO:
-    ${contexto}
-    ---
-    PERGUNTA:
-    ${pergunta}
-  `;
-
-  // Chama a API Generativa
-  const url = `https://generativelanguage.googleapis.com/v1beta/${GENERATIVE_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-  
-  const payload = {
-    contents: [{ parts: [{ text: prompt }] }]
-  };
-
-  const options = {
-    method: 'POST',
-    contentType: 'application/json',
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  };
+  historico = historico || [];
 
   try {
-    const response = UrlFetchApp.fetch(url, options);
-    const rawResponse = response.getContentText();
-    Logger.log("🔹 Retorno da API Gemini (Generate):");
-    Logger.log(rawResponse);
-
-    const data = JSON.parse(rawResponse);
+    // 1. LÓGICA DE BUSCA DE CONTEXTO (RAG)
+    Logger.log(`Iniciando busca de contexto para: "${pergunta}"`);
     
-    if (data.error) {
-       Logger.log(`❌ Erro da API Gemini: ${data.error.message}`);
-       return `Erro ao chamar a API: ${data.error.message}`;
+    // Assume que a função encontrarContextoRelevante existe no seu código
+    const resultadoBusca = encontrarContextoRelevante(pergunta); 
+    const contextos = resultadoBusca.contextos; 
+    const similaridade = resultadoBusca.maiorSimilaridade; 
+    const contexto = contextos.join("\n\n---\n\n"); 
+    
+    // 2. Tratamento de erro do RAG
+    if (contextos.length === 1 && contextos[0].includes("Erro")) {
+      Logger.log(`Erro retornado pelo RAG: ${contextos[0]}`);
+      return contextos[0]; 
     }
 
+    const SIMILARITY_THRESHOLD = 0.3;
+
+    // --- PROMPT da i.a 
+    const promptInformar = {
+      parts: [{ text: `
+        Você é um assistente virtual amigável e prestativo, especialista nos procedimentos do DRA. Sua tarefa é analisar a PERGUNTA do usuário, o HISTÓRICO da conversa e os dados de CONTEXTO e SIMILARIDADE para formular a melhor resposta. O HISTÓRICO é crucial. Se a pergunta for curta (ex: "e sobre X?", "por que?"), ela provavelmente se refere à sua resposta anterior. O CONTEXTO pode conter vários trechos do documento, separados por "---". Encontre a resposta relevante dentro deles.
+
+        REGRAS DE FORMATAÇÃO: Sempre formate suas respostas usando Markdown simples para facilitar a leitura. Use negrito para destacar termos importantes e listas com hífens (-) ou números (1., 2.) para passos ou itens. Não use cabeçalhos (#).
+
+        NOVA REGRA: TOM DE VOZ E ENCERRAMENTO:
+        Seja sempre amigável, prestativo e direto ao ponto.
+        Após dar a resposta (Regra 1) ou se não encontrar (Regra 2), sempre termine com uma pergunta amigável, como "Posso ajudar em algo mais?" ou "Isso esclarece sua dúvida?".
+
+        REGRAS DE COMPORTAMENTO:
+
+        PERGUNTA SOBRE O DRA (COM BOM CONTEXTO):
+        Se a PERGUNTA for sobre os procedimentos do DRA e a SIMILARIDADE for ALTA (acima de ${SIMILARITY_THRESHOLD}), use o CONTEXTO fornecido para responder.
+        Refine a Apresentação: Mesmo que o contexto seja um bloco de texto, use as regras de formatação (listas, negrito) para organizar a informação e torná-la fácil de ler.
+        Seja Fiel ao Contexto: Seja direto e claro. Não adicione informações que não estejam no contexto nem tente "ensinar" o porquê (esse é o trabalho do modo "Ensinar").
+
+        PERGUNTA SOBRE O DRA (COM CONTEXTO RUIM):
+        Se a PERGUNTA parece ser sobre o DRA, mas a SIMILARIDADE for BAIXA (abaixo de ${SIMILARITY_THRESHOLD}) ou o CONTEXTO não contiver a resposta, responda educadamente: "Hum, não consegui encontrar essa informação exata nos meus documentos."
+        Dê a Próxima Etapa: Em seguida, ajude o usuário sugerindo o modo "Ensinar". Diga: "Dica: Se você for um colaborador e achar que esta é uma informação que eu deveria saber, por favor, mude o seletor para o modo 'Ensinar' e envie a pergunta. Isso notificará um especialista para me treinar!"
+
+        PERGUNTAS "META" (SOBRE VOCÊ):
+        Se a PERGUNTA for sobre você, suas capacidades, ou saudações, responda de forma amigável e natural.
+        Explique que você é um assistente focado em ajudar com as dúvidas sobre os procedimentos do DRA.
+        (Ex: "Olá! Eu sou um assistente virtual e estou aqui para ajudar com perguntas sobre o DRA.")
+
+        PERGUNTAS FORA DE TÓPICO (NÃO RELACIONADAS):
+        Se a PERGUNTA NÃO tiver relação com o DRA, recuse educadamente.
+        Diga algo como: "Desculpe, mas só posso responder perguntas relacionadas aos procedimentos do DRA."
+      `}]
+    };
+
+    // --- PROMPT ENSINAR 
+    const promptEnsinar = {
+      parts: [{ text: `
+        Você é um Mentor Sênior especialista nos procedimentos do DRA. Sua principal função é ENSINAR o colaborador. Sua tarefa é analisar a PERGUNTA, o HISTÓRICO e os dados de CONTEXTO para formular uma resposta didática, como um professor. O HISTÓRICO é crucial. Se a pergunta for curta (ex: "e sobre X?"), ela provavelmente se refere à sua resposta anterior. O CONTEXTO pode conter vários trechos do documento, separados por "---".
+
+        REGRAS DE FORMATAÇÃO (Didática): Sempre formate suas respostas usando Markdown simples. Use negrito para destacar conceitos-chave. Use listas com números (1., 2.) para explicar passos (o "como chegar lá"). Use listas com hífens (-) para destacar pontos de atenção (o "o que cuidar", armadilhas, exceções).
+
+        REGRAS DE COMPORTAMENTO (ENSINAR):
+
+        CASO ESPECIAL (MODELOS DE RESPOSTA):
+        Se o CONTEXTO contiver claramente um modelo de resposta ou comunicado padrão (ex: "Prezado(a) Aluno(a), Documento anexado..."), sua tarefa principal é dupla:
+        1. Forneça o Modelo: Apresente o modelo de resposta exato para o colaborador, usando aspas ou um bloco de citação, para que ele aprenda o texto correto.
+        2. Ensine o "Porquê": Explique o motivo por trás dessa resposta. (Ex: "Quando o aluno solicitar X, este é o comunicado padrão que utilizamos.")
+        3. Refine a Explicação: O CONTEXTO foi escrito por um colaborador. Se a explicação dele sobre "quando usar" parecer confusa, não copie literalmente. Sua função de Mentor é refinar e simplificar a explicação, tornando-a mais clara.
+        4. Destaque "O que Cuidar": Use hífens (-) para explicar os pré-requisitos ou verificações necessárias antes de usar essa resposta. (Ex: "- Lembre-se de usar essa resposta apenas após a aprovação do preview, como o texto menciona.")
+
+        PERGUNTA SOBRE O DRA (COM BOM CONTEXTO GERAL):
+        (Se não for um modelo de resposta padrão)
+        Refine a Explicação: O CONTEXTO foi escrito por um colaborador. Se a linguagem dele parecer confusa, difícil ou muito técnica, não copie literalmente. Sua função de Mentor é refinar, simplificar e organizar essa informação para que o aprendizado seja fácil.
+        Explique o "Porquê": Tente explicar o motivo por trás do procedimento (se estiver implícito no contexto).
+        Destaque Passos: Se a pergunta for sobre um processo ("como fazer X"), detalhe os passos claramente (o "como chegar lá").
+        Destaque "O que Cuidar": Aponte armadilhas comuns, exceções ou detalhes importantes mencionados no CONTEXTO (o "o que cuidar").
+        Seja encorajador e claro.
+
+        PERGUNTA SOBRE O DRA (COM CONTEXTO RUIM):
+        Se a SIMILARIDADE for BAIXA (abaixo de ${SIMILARITY_THRESHOLD}) ou o CONTEXTO não contiver a resposta, responda educadamente: "Não encontrei essa informação no documento para poder ensiná-lo em detalhes."
+
+        PERGUNTAS "META" (SOBRE VOCÊ):
+        Responda de forma amigável. Explique que você é um assistente focado em ensinar os procedimentos do DRA.
+        (Ex: "Olá! Eu sou um assistente de ensino e estou aqui para ajudar você a entender a fundo os processos do DRA.")
+
+        PERGUNTAS FORA DE TÓPICO (NÃO RELACIONADAS):
+        Recuse educadamente.
+        Diga algo como: "Meu foco é ensinar sobre os procedimentos do DRA. Não consigo ajudar com esse tópico."
+      `}]
+    };
+
+    // 3. Lógica para escolher o prompt certo
+    let systemInstruction;
+    if (modo === 'Ensinar') {
+      systemInstruction = promptEnsinar;
+      Logger.log("🧠 Modo 'Ensinar' ativado.");
+    } else {
+      systemInstruction = promptInformar;
+      Logger.log("🧠 Modo 'Informar' (padrão) ativado.");
+    }
+
+    const promptParaUsuario = `
+      ---
+      DADOS PARA ANÁLISE (RAG):
+      SIMILARIDADE (Do chunk Top-1): ${similaridade.toFixed(4)}
+      (Limite de confiança: ${SIMILARITY_THRESHOLD})
+      CONTEXTO (Top-${contextos.length} chunks encontrados):
+      ${contexto || "Nenhum contexto encontrado."}
+      ---
+      PERGUNTA:
+      ${pergunta}
+    `;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/${GENERATIVE_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+    
+    const contentsPayload = [
+      ...historico, 
+      { 
+        role: "user", 
+        parts: [{ text: promptParaUsuario }] 
+      }
+    ];
+
+    const payload = {
+      contents: contentsPayload,
+      systemInstruction: systemInstruction 
+    };
+    const options = {
+      method: 'POST',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true 
+    };
+    
+    // Assume que fetchWithRetry existe no seu código
+    const data = fetchWithRetry(url, options);
+
+    if (typeof data !== 'object' || data === null) {
+      Logger.log(`❌ Erro inesperado de fetchWithRetry. Retornou: ${data}`);
+      return `Erro no servidor: ${data}`;
+    }
+
+    if (data.error) {
+        Logger.log(`❌ Erro da API Gemini (JSON): ${data.error.message}`);
+        return `Erro ao chamar a API (JSON): ${data.error.message}`;
+    }
+    
     const resposta = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
+    // --- SEGURANÇA (SAFETY FILTER) ---
+    if (!resposta) {
+      const finishReason = data?.candidates?.[0]?.finishReason;
+      Logger.log(`⚠️ A resposta está vazia. FinishReason: ${finishReason}`);
+      
+      if (finishReason === "SAFETY") {
+        return "❌ A sua solicitação foi bloqueada por motivos de segurança. Por favor, reformule sua pergunta.";
+      }
+      if (finishReason) {
+          return `❌ A resposta foi bloqueada pela API. Motivo: ${finishReason}`;
+      }
+    }
+
+    // --- REGISTRO DE RESPOSTAS FALHAS ---
+    if (resposta) {
+      const respostaLower = resposta.toLowerCase();
+      
+      const isFailure = respostaLower.includes("não encontrei") || 
+                        respostaLower.includes("não está detalhado") ||
+                        respostaLower.includes("não consta no") ||
+                        respostaLower.includes("não localizei");
+
+      const isRefusal = respostaLower.includes("só posso responder") ||
+                        respostaLower.includes("fui treinado apenas");
+
+      if (isFailure && !isRefusal) {
+        Logger.log("Registrando pergunta (IA não encontrou no RAG - Genérico)...");
+        // Assume que esta função existe no código
+        registrarPerguntaSemResposta(pergunta, historico, resposta);
+      }
+    }
+
     return resposta || "Não foi possível gerar uma resposta.";
+
   } catch (e) {
-    Logger.log('❌ Erro na chamada da API Generativa: ' + e);
-    return 'Erro ao gerar resposta. Verifique sua conexão ou chave.';
+    // --- TRATAMENTO DE ERROS ---
+    Logger.log('❌ Erro capturado em responderPergunta: ' + e);
+    const msgErro = (e.message || e.toString()).toLowerCase();
+
+    if (msgErro.includes("429") || msgErro.includes("quota") || msgErro.includes("resource_exhausted")) {
+      return "😅 Ufa, trabalhei bastante agora! Atingi meu limite de velocidade. Por favor, aguarde uns 2 minutinhos e tente perguntar novamente.";
+    }
+
+    if (msgErro.includes("503") || msgErro.includes("overloaded") || msgErro.includes("temporarily overloaded")) {
+      return "🚦 Meus servidores estão congestionados no momento. Tente enviar sua pergunta de novo em 1 minuto, por favor.";
+    }
+
+    if (msgErro.includes("safety") || msgErro.includes("blocked") || msgErro.includes("harmful")) {
+      return "🛡️ Por motivos de segurança e diretrizes de conteúdo, não posso gerar uma resposta para essa solicitação específica.";
+    }
+
+    if (msgErro.includes("key") || msgErro.includes("403") || msgErro.includes("api key") || msgErro.includes("invalid argument")) {
+      return "🔑 Parece haver um problema técnico com minha chave de acesso. Por favor, avise para o colaborador .";
+    }
+
+    return "😔 Tive um problema técnico 'Erro Genérico' favor Informar o colaborador";
   }
 }
 
+
 /***************************************************
- * ✅ FUNÇÃO DE TESTE
+ * FUNÇÃO DE TESTE (Não use "Executar" nela)
  ***************************************************/
+ //para ver se tudo está funcional
 function testarChat() {
-  const resposta = responderPergunta("Como emitir a declaração de matrícula?");
-  Logger.log("💬 Resposta da IA:");
-  Logger.log(resposta);
+  Logger.log("--- INICIANDO TESTE DE CHAT COM HISTÓRICO ---");
+  let historico = [];
+  let pergunta1 = "Olá, tudo bem? O que você faz?";
+  Logger.log(`P1 (Usuário): ${pergunta1}`);
+  let resposta1 = responderPergunta(pergunta1, historico);
+  Logger.log(`R1 (IA): ${resposta1}`);
 }
 
 /***************************************************
- * 🔍 FUNÇÃO DE DIAGNÓSTICO: LISTAR MODELOS
+ * FUNÇÃO DE DIAGNÓSTICO: LISTAR MODELOS
  ***************************************************/
-
-/**
- * Executa esta função para listar no Log todos os modelos Gemini
- * disponíveis para a sua chave de API.
- */
+ // função usada para enontrar possiveis modelos 
 function listarModelosDisponiveis() {
   if (!GEMINI_API_KEY) {
     Logger.log('❌ Chave de API não encontrada nas Propriedades do Script.');
     return;
   }
-
   const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}`;
-
   const options = {
     method: 'GET',
     muteHttpExceptions: true
   };
-
   try {
     const response = UrlFetchApp.fetch(url, options);
     const rawResponse = response.getContentText();
     const data = JSON.parse(rawResponse);
-
     if (data.error) {
       Logger.log(`❌ Erro ao listar modelos: ${data.error.message}`);
       return;
     }
-
     Logger.log('✅ Modelos disponíveis para sua chave:');
-    
-    // Formata a saída para ser mais legível
     const formattedModels = data.models.map(model => ({
       nome: model.name,
       metodosSuportados: model.supportedGenerationMethods
     }));
-
     Logger.log(JSON.stringify(formattedModels, null, 2));
-    
   } catch (e) {
     Logger.log(`🚨 Erro crítico na execução: ${e.message}`);
   }
 }
 /***************************************************
- * 🌐 FUNÇÃO DE ENTRADA DO APLICATIVO WEB
+ * FUNÇÃO DE ENTRADA DO APLICATIVO WEB 
  ***************************************************/
-
-/**
- * @param {Object} e O parâmetro do evento da requisição GET.
- * @returns {HtmlOutput} O conteúdo HTML da página.
- */
+ //basicamente tudo que sera enviado para o client-side
 function doGet(e) {
-  const htmlOutput = HtmlService.createHtmlOutputFromFile('index');
+  Logger.log("=========================================");
+  Logger.log("🚀 doGet: Iniciando carregamento do Aplicativo Web.");
   
-  // Define o título que aparecerá na aba do navegador
-  htmlOutput.setTitle('Assistente DRA - UNISUAM');
-  
-  // Adiciona a meta tag de viewport para garantir que o layout funcione bem em celulares
-  htmlOutput.addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  const template = HtmlService.createTemplateFromFile('index');
 
+  // --- LÓGICA DE SEGURANÇA --- segurança por obscuridade" (security through obscurity)
+  // Verifica se a URL tem: ?acesso=admin=senhadra15523
+  const parametroAcesso = e.parameter.acesso;
+  const chaveEsperada = "admin=" + SENHA_MESTRA;
+  const isAdmin = (parametroAcesso === chaveEsperada);
+  
+  // Passa as variáveis para o HTML
+  template.isAdmin = isAdmin; 
+  template.senhaAutenticada = isAdmin ? SENHA_MESTRA : ""; 
+
+  // --- CARREGAMENTO DE IMAGENS ---
+  Logger.log(`Buscando ${LOGO_FILE_NAME}...`);
+  template.logoData = getImageData(LOGO_FILE_NAME); 
+  
+  Logger.log(`Buscando ${BACKGROUND_FILE_NAME}...`);
+  template.bgData = getImageData(BACKGROUND_FILE_NAME); 
+  
+  Logger.log(`Buscando ${AVATAR_AI_FILE_NAME}...`);
+  template.avatarAiData = getImageData(AVATAR_AI_FILE_NAME); 
+
+  Logger.log("✅ doGet: Dados injetados. Gerando HTML...");
+  
+  const htmlOutput = template.evaluate()
+      .setTitle('Assistente DRA - UNISUAM')
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+
+  Logger.log("=========================================");
   return htmlOutput;
+}
+
+
+/***************************************************
+ * FUNÇÃO DE TESTE
+ * Para executar:
+ * 1. Salve o arquivo.
+ * 2. No editor do Apps Script, recarregue a página se necessário.
+ * 3. No menu de seleção de funções (ao lado de "Depurar"), 
+ * escolha "testarResponderPergunta".
+ * 4. Clique em "Executar".
+ * 5. Veja o resultado do log aqui embaixo na "Pilha de execução".
+ ***************************************************/
+function testarResponderPergunta() {
+  Logger.log("========= INICIANDO TESTE MANUAL =========");
+  
+  // --- SIMULAÇÃO ---
+  
+  // 1. Mude esta pergunta para algo que você sabe que 
+  //    está no seu documento "conhecimento.txt"
+  const perguntaTeste = "Qual o procedimento para abrir um chamado?";
+  
+  // 2. Simule um histórico (pode começar vazio)
+  const historicoTeste = []; 
+  
+  // 3. Simule o modo ('Informar' ou 'Ensinar')
+  const modoTeste = 'Informar';
+  
+  Logger.log(`Testando com: "${perguntaTeste}", Modo: ${modoTeste}`);
+  
+  // --- EXECUÇÃO ---
+  try {
+    // Chamamos a função com os dados de teste
+    const resposta = responderPergunta(perguntaTeste, historicoTeste, modoTeste);
+    
+    Logger.log("========= TESTE CONCLUÍDO =========");
+    Logger.log("PERGUNTA: " + perguntaTeste);
+    Logger.log("RESPOSTA GERADA: ");
+    Logger.log(resposta); // Loga a resposta completa
+    
+  } catch (e) {
+    Logger.log("========= TESTE FALHOU COM ERRO CRÍTICO =========");
+    Logger.log(e);
+  }
 }
