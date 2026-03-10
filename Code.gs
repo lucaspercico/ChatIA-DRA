@@ -432,7 +432,7 @@ function encontrarContextoRelevante(pergunta) {
   }
 
   // 4. Calcula a similaridade (Matemática pura, muito rápido localmente)
-  const TOP_K = 3; // provalvlemente se colocar em supeior de 3 a api vai quebrar em teste inferiores o limite era alcançado  resultando em erro da resposta da api 
+  const TOP_K = 3; // Limite de chunks recuperados. Valores acima de 3 podem causar erros na API em cenários de alta carga.
   const SIMILARITY_THRESHOLD_FOR_RETRIEVAL = 0.3; 
   
   const allSimilarities = chunksComVector.map(item => {
@@ -463,7 +463,19 @@ function encontrarContextoRelevante(pergunta) {
 
 
 function responderPergunta(pergunta, historico, modo) {
-  
+
+  const MAX_PERGUNTA_LENGTH = 1000;
+
+  if (!pergunta || typeof pergunta !== 'string' || pergunta.trim().length === 0) {
+    return "❌ Pergunta inválida ou vazia.";
+  }
+
+  if (pergunta.length > MAX_PERGUNTA_LENGTH) {
+    return `❌ Pergunta muito longa. Por favor, limite sua pergunta a ${MAX_PERGUNTA_LENGTH} caracteres.`;
+  }
+
+  pergunta = pergunta.trim();
+
   // ✅ SEM VERIFICAÇÃO - Todos podem usar qualquer modo
   if (modo === 'Ensinar') {
     Logger.log("🧠 Modo 'Ensinar' ativado por usuário.");
@@ -671,10 +683,10 @@ function responderPergunta(pergunta, historico, modo) {
     }
 
     if (msgErro.includes("key") || msgErro.includes("403") || msgErro.includes("api key") || msgErro.includes("invalid argument")) {
-      return "🔑 Parece haver um problema técnico com minha chave de acesso. Por favor, avise para o colaborador .";
+      return "🔑 Parece haver um problema técnico com minha chave de acesso. Por favor, avise ao colaborador responsável.";
     }
 
-    return "😔 Tive um problema técnico 'Erro Genérico' favor Informar o colaborador";
+    return "😔 Ocorreu um problema técnico inesperado. Por favor, informe ao colaborador responsável.";
   }
 }
 

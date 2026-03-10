@@ -227,6 +227,18 @@
       box-shadow: 0 0 0 3px rgba(0, 90, 156, 0.15);
     }
     
+    .char-counter {
+      display: block;
+      text-align: right;
+      font-size: 11px;
+      color: #999;
+      margin-top: 4px;
+    }
+    .char-counter.char-limit-warn {
+      color: #e65100;
+      font-weight: 600;
+    }
+    
     button {
       background-color: var(--primary-color); color: white; border: none;
       padding: 10px 15px; border-radius: 8px; cursor: pointer;
@@ -514,7 +526,8 @@
     <div class="input-area">
       
       <div class="tooltip-wrapper" id="pergunta-wrapper">
-        <textarea id="pergunta" placeholder="Digite sua dúvida..."></textarea>
+        <textarea id="pergunta" placeholder="Digite sua dúvida..." maxlength="1000"></textarea>
+        <span id="char-counter" class="char-counter">0 / 1000</span>
         
         <span class="help-icon">
           ?
@@ -564,6 +577,8 @@
   const chatLog = document.getElementById('chat-log');
   const perguntaTextarea = document.getElementById('pergunta');
   const sendButton = document.getElementById('send-button');
+  const charCounter = document.getElementById('char-counter');
+  const MAX_PERGUNTA_LENGTH = 1000;
   
   var historico = [];
 
@@ -597,6 +612,12 @@
     }
   });
 
+  perguntaTextarea.addEventListener('input', function() {
+    const len = perguntaTextarea.value.length;
+    charCounter.textContent = len + ' / ' + MAX_PERGUNTA_LENGTH;
+    charCounter.classList.toggle('char-limit-warn', len >= MAX_PERGUNTA_LENGTH * 0.9);
+  });
+
   function appendMessage(sender, text) {
     const messageWrapper = document.createElement('div');
     messageWrapper.classList.add('message', `${sender}-message`);
@@ -611,7 +632,11 @@
     if (text.includes('typing-indicator')) {
         messageContent.innerHTML = text;
     } else {
-        messageContent.innerHTML = marked.parse(text); 
+        try {
+            messageContent.innerHTML = marked.parse(text);
+        } catch (e) {
+            messageContent.textContent = text;
+        }
         
         if (sender === 'ai') {
             const copyBtn = document.createElement('button');
@@ -674,6 +699,13 @@
   function enviarPergunta() {
     const pergunta = perguntaTextarea.value.trim();
     if (!pergunta) return;
+
+    // Defensive guard: maxlength on the textarea prevents this in normal usage,
+    // but programmatic calls or assistive tools could still bypass it.
+    if (pergunta.length > MAX_PERGUNTA_LENGTH) {
+      appendMessage('ai', `❌ Sua pergunta é muito longa. Por favor, limite a ${MAX_PERGUNTA_LENGTH} caracteres.`);
+      return;
+    }
     
     const suggestions = document.querySelector('.suggested-questions');
     if (suggestions) {
