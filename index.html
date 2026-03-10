@@ -216,10 +216,10 @@
     }
 
     textarea {
-      width: 100%; height: 60px; padding: 10px 15px;
+      width: 100%; min-height: 60px; max-height: 200px; padding: 10px 15px;
       border: 1px solid var(--border-color); border-radius: 8px;
       resize: none; font-size: 16px; font-family: inherit;
-      box-sizing: border-box;
+      box-sizing: border-box; overflow-y: auto;
       transition: border-color 0.2s, box-shadow 0.2s;
     }
     textarea:focus {
@@ -480,6 +480,83 @@
     }
     /* --- FIM DO CSS PARA TOOLTIPS --- */
 
+    /* --- STATUS INDICATOR --- */
+    .status-indicator {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background-color: #4caf50;
+      margin-left: 8px;
+      flex-shrink: 0;
+      animation: pulse-green 2s infinite;
+    }
+    .status-indicator.processing {
+      background-color: #ffc107;
+      animation: pulse-yellow 1s infinite;
+    }
+    @keyframes pulse-green {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.4); }
+      50% { box-shadow: 0 0 0 5px rgba(76, 175, 80, 0); }
+    }
+    @keyframes pulse-yellow {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.4); }
+      50% { box-shadow: 0 0 0 5px rgba(255, 193, 7, 0); }
+    }
+
+    /* --- MESSAGE ANIMATION --- */
+    @keyframes messageIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .message-new {
+      animation: messageIn 0.3s ease forwards;
+    }
+
+    /* --- SUGGESTED QUESTIONS --- */
+    .suggested-questions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .suggestion-chip {
+      background: white;
+      border: 1px solid var(--primary-color);
+      color: var(--primary-color);
+      padding: 6px 12px;
+      border-radius: 16px;
+      cursor: pointer;
+      font-size: 13px;
+      margin-top: 0;
+      width: auto;
+      transition: background-color 0.2s, color 0.2s;
+    }
+    .suggestion-chip:hover {
+      background-color: var(--primary-color);
+      color: white;
+    }
+
+    /* --- SEND BUTTON LOADING STATE --- */
+    #send-button.loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      background-color: #a0a0a0;
+      cursor: not-allowed;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    .spinner-svg {
+      animation: spin 0.8s linear infinite;
+      width: 16px;
+      height: 16px;
+      fill: white;
+      flex-shrink: 0;
+    }
+
   </style>
 </head>
 <body <? if (bgData) { ?>
@@ -500,6 +577,7 @@
       <? } ?>
       
       <span>Assistente DRA - UNISUAM</span>
+      <span id="status-indicator" class="status-indicator" title="Online"></span>
       
       <button id="clear-chat-btn" title="Limpar conversa" onclick="limparChat()">×</button>
     </div>
@@ -519,6 +597,12 @@
         </div>
         <div class="message-content">
           <p>Olá! Eu sou o assistente virtual do DRA. Como posso ajudar?</p>
+          <div class="suggested-questions">
+            <button class="suggestion-chip" onclick="usarSugestao(this)">Como faço minha matrícula?</button>
+            <button class="suggestion-chip" onclick="usarSugestao(this)">Quais documentos preciso entregar?</button>
+            <button class="suggestion-chip" onclick="usarSugestao(this)">Como solicitar histórico escolar?</button>
+            <button class="suggestion-chip" onclick="usarSugestao(this)">Como funciona o trancamento de matrícula?</button>
+          </div>
         </div>
       </div>
     </div>
@@ -602,6 +686,12 @@
         </div>
         <div class="message-content">
           <p>Olá! Eu sou o assistente virtual do DRA. Como posso ajudar?</p>
+          <div class="suggested-questions">
+            <button class="suggestion-chip" onclick="usarSugestao(this)">Como faço minha matrícula?</button>
+            <button class="suggestion-chip" onclick="usarSugestao(this)">Quais documentos preciso entregar?</button>
+            <button class="suggestion-chip" onclick="usarSugestao(this)">Como solicitar histórico escolar?</button>
+            <button class="suggestion-chip" onclick="usarSugestao(this)">Como funciona o trancamento de matrícula?</button>
+          </div>
         </div>`;
   
   
@@ -616,6 +706,9 @@
     const len = perguntaTextarea.value.length;
     charCounter.textContent = len + ' / ' + MAX_PERGUNTA_LENGTH;
     charCounter.classList.toggle('char-limit-warn', len >= MAX_PERGUNTA_LENGTH * 0.9);
+    // Auto-resize: reset first so the element can shrink, then grow to fit content
+    perguntaTextarea.style.height = '60px';
+    perguntaTextarea.style.height = Math.min(perguntaTextarea.scrollHeight, 200) + 'px';
   });
 
   function appendMessage(sender, text) {
@@ -658,9 +751,10 @@
     messageWrapper.appendChild(avatar);
     messageWrapper.appendChild(messageContent);
     chatLog.appendChild(messageWrapper);
+    messageWrapper.classList.add('message-new');
     
     setTimeout(function() {
-      chatLog.scrollTop = chatLog.scrollHeight;
+      chatLog.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }, 0); 
     
     return messageWrapper;
@@ -714,9 +808,18 @@
 
     appendMessage('user', pergunta);
     perguntaTextarea.value = '';
+    perguntaTextarea.style.height = '60px';
     charCounter.textContent = '0 / ' + MAX_PERGUNTA_LENGTH;
     charCounter.classList.remove('char-limit-warn');
     sendButton.disabled = true;
+    sendButton.classList.add('loading');
+    sendButton.innerHTML = '<svg class="spinner-svg" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2a10 10 0 0 1 10 10h-2a8 8 0 0 0-8-8V2z"/></svg>Aguardando...';
+
+    const statusIndicator = document.getElementById('status-indicator');
+    if (statusIndicator) {
+      statusIndicator.classList.add('processing');
+      statusIndicator.title = 'Processando';
+    }
 
     const typingIndicator = appendMessage('ai', '<div class="typing-indicator"><span></span><span></span><span></span></div>');
 
@@ -736,10 +839,17 @@
     google.script.run
     .withSuccessHandler(function(resposta) {
         typingIndicator.remove();
-        const respostaFormatada = resposta || "Não recebi uma resposta válida.";
-        appendMessage('ai', respostaFormatada);
-        
         sendButton.disabled = false;
+        sendButton.classList.remove('loading');
+        sendButton.innerHTML = 'Enviar';
+        if (statusIndicator) {
+          statusIndicator.classList.remove('processing');
+          statusIndicator.title = 'Online';
+        }
+
+        const respostaFormatada = resposta || "Não recebi uma resposta válida.";
+        appendAIMessageWithTypewriter(respostaFormatada);
+
         perguntaTextarea.focus();
         
         historico.push({ 
@@ -754,9 +864,15 @@
       })
       .withFailureHandler(function(err) {
         typingIndicator.remove();
+        sendButton.disabled = false;
+        sendButton.classList.remove('loading');
+        sendButton.innerHTML = 'Enviar';
+        if (statusIndicator) {
+          statusIndicator.classList.remove('processing');
+          statusIndicator.title = 'Online';
+        }
         appendMessage('ai', '❌ Ocorreu um erro. Por favor, tente novamente.');
         console.error(err);
-        sendButton.disabled = false;
         perguntaTextarea.focus();
       })
       
@@ -776,6 +892,90 @@
           buttonElement.textContent = 'Copiar';
         }, 2000);
       });
+  }
+
+  function typewriterEffect(container, speed) {
+    const textNodes = [];
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.textContent.trim()) {
+        textNodes.push({ node: node, fullText: node.textContent });
+      }
+    }
+    textNodes.forEach(function(item) { item.node.textContent = ''; });
+
+    if (textNodes.length === 0) return;
+
+    let nodeIndex = 0;
+    let charIndex = 0;
+    const BATCH = 4;
+    const TYPEWRITER_TICK_MS = speed; // milliseconds between each batch of revealed characters
+
+    function tick() {
+      // Stop if the container has been removed from the DOM (e.g. chat cleared)
+      if (!container.isConnected) return;
+      if (nodeIndex >= textNodes.length) return;
+      const current = textNodes[nodeIndex];
+      charIndex = Math.min(charIndex + BATCH, current.fullText.length);
+      current.node.textContent = current.fullText.slice(0, charIndex);
+      if (charIndex >= current.fullText.length) {
+        nodeIndex++;
+        charIndex = 0;
+      }
+      setTimeout(tick, TYPEWRITER_TICK_MS);
+    }
+
+    tick();
+  }
+
+  function appendAIMessageWithTypewriter(text) {
+    const messageWrapper = document.createElement('div');
+    messageWrapper.classList.add('message', 'ai-message');
+
+    const avatar = document.createElement('div');
+    avatar.classList.add('avatar');
+    avatar.innerHTML = aiAvatarHTML;
+
+    const messageContent = document.createElement('div');
+    messageContent.classList.add('message-content');
+
+    try {
+      messageContent.innerHTML = marked.parse(text);
+    } catch (e) {
+      messageContent.textContent = text;
+    }
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'copy-button';
+    copyBtn.textContent = 'Copiar';
+    copyBtn.onclick = function() { copiarResposta(this); };
+    messageContent.appendChild(copyBtn);
+
+    const feedbackDiv = document.createElement('div');
+    feedbackDiv.className = 'feedback-buttons';
+    feedbackDiv.innerHTML = '<button title="Gostei" onclick="darFeedback(this, \'like\')">👍</button>' +
+                            '<button title="Não gostei" onclick="darFeedback(this, \'dislike\')">👎</button>';
+    messageContent.appendChild(feedbackDiv);
+
+    messageWrapper.appendChild(avatar);
+    messageWrapper.appendChild(messageContent);
+    chatLog.appendChild(messageWrapper);
+    messageWrapper.classList.add('message-new');
+
+    setTimeout(function() {
+      chatLog.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }, 0);
+
+    typewriterEffect(messageContent, 20 /* ms per tick */);
+
+    return messageWrapper;
+  }
+
+  function usarSugestao(chip) {
+    perguntaTextarea.value = chip.textContent.trim();
+    perguntaTextarea.dispatchEvent(new Event('input'));
+    enviarPergunta();
   }
 </script>
 </body>
