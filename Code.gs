@@ -24,7 +24,7 @@ const GENERATIVE_MODEL = 'models/gemini-flash-latest';
 // --- CONFIGURAÇÕES DE ARQUIVOS DO DRIVE ---
 const DRIVE_FOLDER_NAME = "I.A conhecimento";
 const KNOWLEDGE_FILE_NAME = "conhecimento.txt";
-const REPORT_FILE_NAME = "Relatorio_Pergunstas_Nao_Respondidas.txt";
+const REPORT_FILE_NAME = "Relatorio_Perguntas_Nao_Respondidas.txt";
 const LOGO_FILE_NAME = "logo.png"; 
 
 
@@ -403,6 +403,8 @@ function recuperarOuGerarEmbeddings(folder, fullText, fileTimestamp) {
     
     return baseDeDados;
   }
+
+  return [];
 }
 
 function encontrarContextoRelevante(pergunta) {
@@ -476,7 +478,7 @@ function responderPergunta(pergunta, historico, modo) {
 
   pergunta = pergunta.trim();
 
-  // ✅ SEM VERIFICAÇÃO - Todos podem usar qualquer modo
+  // Modo de operação: Informar (padrão) ou Ensinar
   if (modo === 'Ensinar') {
     Logger.log("🧠 Modo 'Ensinar' ativado por usuário.");
   } else {
@@ -741,13 +743,13 @@ function listarModelosDisponiveis() {
  ***************************************************/
 function doGet(e) {
   Logger.log("=========================================");
-  Logger.log("🚀 doGet: Iniciando carregamento do Aplicativo Web (SEM AUTENTICAÇÃO).");
+  Logger.log("🚀 doGet: Iniciando carregamento do Aplicativo Web.");
   
   const template = HtmlService.createTemplateFromFile('index');
 
-  // ✅ LIBERADO PARA TODOS - Sem verificação de URL
-  template.isAdmin = true; // TODOS têm acesso ao toggle
-  template.senhaAutenticada = ""; // Sem senha
+  // Autenticação gerenciada pelo Google Script (baseada no e-mail do usuário)
+  template.isAdmin = true;
+  template.senhaAutenticada = "";
 
   // --- CARREGAMENTO DE IMAGENS ---
   Logger.log(`Buscando ${LOGO_FILE_NAME}...`);

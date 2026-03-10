@@ -714,6 +714,8 @@
 
     appendMessage('user', pergunta);
     perguntaTextarea.value = '';
+    charCounter.textContent = '0 / ' + MAX_PERGUNTA_LENGTH;
+    charCounter.classList.remove('char-limit-warn');
     sendButton.disabled = true;
 
     const typingIndicator = appendMessage('ai', '<div class="typing-indicator"><span></span><span></span><span></span></div>');
