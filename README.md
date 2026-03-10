@@ -10,7 +10,7 @@ Assistente de IA conversacional construído sobre **Google Apps Script** e **Gem
 |---|---|
 | 💬 Chat em tempo real | Interface de bate-papo responsiva, com suporte a Markdown nas respostas |
 | 🔍 RAG (Retrieval-Augmented Generation) | Busca semântica por embeddings para encontrar o contexto mais relevante antes de responder |
-| 🧠 Cache de Embeddings | Os vetores gerados são armazenados no Google Drive; só são regenerados quando o documento de conhecimento muda, economizando custos de API |
+| 🧠 Cache de Embeddings | Os vetores são guardados no Google Drive **e no CacheService** (memória compartilhada). Só são regenerados quando o documento de conhecimento muda |
 | 🎓 Dois modos de resposta | **Informar** (respostas diretas para alunos) e **Ensinar** (explicações didáticas para colaboradores) |
 | 👍👎 Feedback | Botões de like/dislike em cada resposta; feedbacks negativos são registrados automaticamente para revisão |
 | 📝 Relatório de lacunas | Perguntas não respondidas são salvas em arquivo `.txt` no Drive para alimentar a base de conhecimento futuramente |
@@ -35,7 +35,8 @@ Usuário (Browser)
 │    ├─ encontrarContextoRelevante()          │
 │    │    ├─ generateEmbedding()  → Gemini API│
 │    │    └─ recuperarOuGerarEmbeddings()     │
-│    │         └─ Google Drive (JSON cache)   │
+│    │         ├─ CacheService  (1ª opção)    │
+│    │         └─ Google Drive  (fallback)    │
 │    └─ fetchWithRetry()  → Gemini API        │
 │                                             │
 │  registrarFeedback()  → Google Drive        │
@@ -128,13 +129,27 @@ Na primeira vez que a IA receber uma pergunta, ela irá:
 3. Gerar um vetor de embedding para cada chunk via Gemini API.
 4. Salvar tudo em `embeddings_db.json` no Drive para uso futuro.
 
-> ⏳ Esse processo pode levar **1-2 minutos** na primeira vez, dependendo do tamanho do documento. Nas consultas seguintes, os embeddings são carregados diretamente do cache (instantâneo).
+> ⏳ Esse processo pode levar **1-2 minutos** na primeira vez, dependendo do tamanho do documento. Nas consultas seguintes, os embeddings são carregados diretamente do CacheService (memória compartilhada) — sem nenhuma leitura de Drive.
 
 ---
 
 ### 6. Atualizar a Base de Conhecimento
 
 Edite e salve o arquivo `conhecimento.txt` no Drive. O sistema detecta automaticamente que o arquivo mudou (comparando o timestamp) e regenera os embeddings na próxima consulta.
+
+---
+
+## ⚡ Hierarquia de Cache
+
+Em cada requisição, o pipeline carrega os embeddings pela ordem de velocidade:
+
+| Prioridade | Fonte | Latência típica | Quando é usado |
+|---|---|---|---|
+| 1 | **CacheService** (memória compartilhada) | < 100ms | 99% das requisições |
+| 2 | **Google Drive** (arquivo JSON) | 500ms – 2s | Após reinício do script ou expiração do cache (6h) |
+| 3 | **Gemini API** (geração) | 1-5 min | Apenas quando `conhecimento.txt` é modificado |
+
+Os IDs de pasta e arquivo também são armazenados em cache, evitando buscas lentas por nome (`getFoldersByName` / `getFilesByName`) após a primeira requisição.
 
 ---
 

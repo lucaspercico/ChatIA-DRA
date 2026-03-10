@@ -1,14 +1,11 @@
 /***************************************************
- * Chat DRA com Gemini 2.5 Flash + Embeddings Cache
- * Autor: Lucas + I.A fiz em low-code 
- * * MODIFICADO: Versão final com RAG Top-K, Histórico,
- * Retentativas de API e carregamento de imagens do Drive.
- * Otimizações: Markdown, Feedback e Nome do Modelo.
- * 
-    Ler e Limpar	getKnowledgeData
-    Traduzir para Números	getEmbeddings
-    Decidir o que é relevante	findMostRelevantChunks
-    Montar e Enviar o Pedido	callGemini
+ * Chat DRA com Gemini Flash + Embeddings Cache
+ * Autor: Lucas + I.A
+ * Pipeline RAG:
+ *   Ler e Limpar          getKnowledgeBaseAndTimestamp
+ *   Traduzir para Números  recuperarOuGerarEmbeddings
+ *   Decidir o relevante    encontrarContextoRelevante
+ *   Montar e Enviar        responderPergunta / fetchWithRetry
  ***************************************************/
 
 /** CONFIGURAÇÕES */
@@ -33,8 +30,21 @@ const AVATAR_AI_FILE_NAME = "i.a.png";
 
 
 const REPORT_FEEDBACK_FILE_NAME = "Relatorio_Feedback_IA.txt";
-// cria um conhecimento não apagavel economiza recursos
+// Persiste os vetores de embedding no Drive para não regenerá-los a cada deploy
 const EMBEDDINGS_FILE_NAME = "embeddings_db.json";
+
+// --- CHAVES DO CACHESERVICE (nomes curtos = menos overhead) ---
+const CACHE_TTL           = 21600; // 6 horas
+const CACHE_FOLDER_ID     = 'kf_folder_id';
+const CACHE_KB_FILE_ID    = 'kf_file_id';
+const CACHE_KB_TIMESTAMP  = 'knowledge_base_last_updated'; // mantido para compatibilidade
+const CACHE_KB_TEXT       = 'knowledge_base_text';         // mantido para compatibilidade
+const CACHE_EMB_FILE_ID   = 'emb_file_id';
+const CACHE_EMB_META      = 'emb_meta';
+const CACHE_EMB_PAGE_PFX  = 'emb_p_';
+// Máximo de chunks por página de cache (cada página deve ficar abaixo de 100 KB)
+// text-embedding-004 = 768 floats ≈ 9 KB/vetor + ~1.5 KB de texto ≈ 11 KB/chunk
+const EMB_CHUNKS_PER_PAGE = 5; // 5 × 11 KB ≈ 55 KB — margem segura
 
 
 /***************************************************
@@ -43,24 +53,33 @@ const EMBEDDINGS_FILE_NAME = "embeddings_db.json";
 
 function chunkText(text, maxLength = 1500) {
   const chunks = [];
-  // Divide primeiro por parágrafos (duas quebras de linha)
-  let paragraphs = text.split(/\n\s*\n/);
-  
+  const paragraphs = text.split(/\n\s*\n/);
   let currentChunk = "";
-  
+
   for (const paragraph of paragraphs) {
-    // Se o parágrafo + o chunk atual couberem, junta
-    if ((currentChunk.length + paragraph.length) < maxLength) {
+    if (paragraph.length > maxLength) {
+      // Parágrafo maior que o limite: divide por sentenças antes de agrupar
+      if (currentChunk.length > 0) {
+        chunks.push(currentChunk.trim());
+        currentChunk = "";
+      }
+      const sentences = paragraph.match(/[^.!?]+[.!?]*/g) || [paragraph];
+      for (const sentence of sentences) {
+        if ((currentChunk.length + sentence.length) < maxLength) {
+          currentChunk += sentence + " ";
+        } else {
+          if (currentChunk.length > 0) chunks.push(currentChunk.trim());
+          currentChunk = sentence + " ";
+        }
+      }
+    } else if ((currentChunk.length + paragraph.length) < maxLength) {
       currentChunk += paragraph + "\n\n";
     } else {
-      // Se não couber, salva o atual e começa um novo
       if (currentChunk.length > 0) chunks.push(currentChunk.trim());
       currentChunk = paragraph + "\n\n";
     }
   }
-  // Adiciona o que sobrou
   if (currentChunk.length > 0) chunks.push(currentChunk.trim());
-  
   return chunks;
 }
 
@@ -69,8 +88,8 @@ function cosineSimilarity(a, b) {
   if (!a || !b || a.length !== b.length) return 0;
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
-    normA += a[i] ** 2;
-    normB += b[i] ** 2;
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
   }
   if (normA === 0 || normB === 0) return 0;
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
@@ -132,34 +151,20 @@ function fetchWithRetry(url, options, maxRetries = 3) {
 
 function generateEmbedding(text) {
   const url = `https://generativelanguage.googleapis.com/v1beta/${EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`;
-  const payload = {
-    content: {
-      parts: [{ text: text }]
-    }
-  };
   const options = {
     method: "POST",
     contentType: "application/json",
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true 
+    payload: JSON.stringify({ content: { parts: [{ text: text }] } }),
+    muteHttpExceptions: true
   };
-  
   try {
-    // fetchWithRetry AGORA RETORNA O JSON (objeto 'data') DIRETAMENTE.
-    // não precisamo mais chamar .getContentText() ou JSON.parse().
     const data = fetchWithRetry(url, options);
-
-    // Se o JSON retornado tiver um erro, logamos.
     if (data.error) {
-      Logger.log(`❌ Erro na API Embedding (JSON): ${data.error.message}`);
-      throw new Error(data.error.message); // <--- Lança o erro para o tratador principal
+      Logger.log(`❌ Erro na API Embedding: ${data.error.message}`);
+      throw new Error(data.error.message);
     }
-    
-    // Retornamos os valores do embedding diretamente.
     return data?.embedding?.values || [];
-
   } catch (e) {
-    // Se fetchWithRetry falhar (ex: 400, 500), o erro será pego aqui.
     Logger.log("❌ Erro ao gerar embedding (após retentativas): " + e);
     throw e;
   }
@@ -170,14 +175,24 @@ function generateEmbedding(text) {
  ***************************************************/
 
 function getKnowledgeFolder() {
+  const cache = CacheService.getScriptCache();
+  const cachedId = cache.get(CACHE_FOLDER_ID);
+  if (cachedId) {
+    try {
+      return DriveApp.getFolderById(cachedId); // getFolderById é muito mais rápido que getFoldersByName
+    } catch (e) {
+      cache.remove(CACHE_FOLDER_ID); // ID ficou inválido (pasta deletada/movida)
+    }
+  }
   try {
     const folders = DriveApp.getFoldersByName(DRIVE_FOLDER_NAME);
     if (folders.hasNext()) {
-      return folders.next();
-    } else {
-      Logger.log(`❌ Pasta não encontrada: ${DRIVE_FOLDER_NAME}`);
-      return null;
+      const folder = folders.next();
+      cache.put(CACHE_FOLDER_ID, folder.getId(), CACHE_TTL);
+      return folder;
     }
+    Logger.log(`❌ Pasta não encontrada: ${DRIVE_FOLDER_NAME}`);
+    return null;
   } catch (e) {
     Logger.log(`❌ Erro ao acessar o Drive: ${e}. Verifique as permissões.`);
     return null;
@@ -219,28 +234,40 @@ function getImageData(fileName) {
 function getKnowledgeBaseAndTimestamp() {
   const cache = CacheService.getScriptCache();
   const folder = getKnowledgeFolder();
-  if (!folder) {
-    return { text: null, timestamp: null };
+  if (!folder) return { text: null, timestamp: null };
+
+  // Tenta obter o arquivo diretamente pelo ID em cache (evita getFilesByName a cada chamada)
+  let file = null;
+  const cachedFileId = cache.get(CACHE_KB_FILE_ID);
+  if (cachedFileId) {
+    try {
+      file = DriveApp.getFileById(cachedFileId);
+    } catch (e) {
+      cache.remove(CACHE_KB_FILE_ID); // ID inválido
+    }
   }
-  const files = folder.getFilesByName(KNOWLEDGE_FILE_NAME);
-  if (!files.hasNext()) {
-    Logger.log(`❌ Arquivo não encontrado: ${KNOWLEDGE_FILE_NAME} na pasta ${DRIVE_FOLDER_NAME}`);
-    return { text: null, timestamp: null };
+  if (!file) {
+    const files = folder.getFilesByName(KNOWLEDGE_FILE_NAME);
+    if (!files.hasNext()) {
+      Logger.log(`❌ Arquivo não encontrado: ${KNOWLEDGE_FILE_NAME} na pasta ${DRIVE_FOLDER_NAME}`);
+      return { text: null, timestamp: null };
+    }
+    file = files.next();
+    cache.put(CACHE_KB_FILE_ID, file.getId(), CACHE_TTL);
   }
-  const file = files.next();
+
   const fileLastUpdated = file.getLastUpdated().toISOString();
-  const cachedLastUpdated = cache.get('knowledge_base_last_updated');
-  
-  if (fileLastUpdated !== cachedLastUpdated) {
+  const cachedTimestamp = cache.get(CACHE_KB_TIMESTAMP);
+
+  if (fileLastUpdated !== cachedTimestamp) {
     Logger.log("🔄 Base de conhecimento alterada. Recarregando do Drive e atualizando o cache...");
     const fileContent = file.getBlob().getDataAsString('UTF-8');
-    cache.put('knowledge_base_text', fileContent, 21600);
-    cache.put('knowledge_base_last_updated', fileLastUpdated, 21600);
+    cache.put(CACHE_KB_TEXT, fileContent, CACHE_TTL);
+    cache.put(CACHE_KB_TIMESTAMP, fileLastUpdated, CACHE_TTL);
     return { text: fileContent, timestamp: fileLastUpdated };
-  } else {
-    const cachedText = cache.get('knowledge_base_text');
-    return { text: cachedText, timestamp: cachedLastUpdated };
   }
+
+  return { text: cache.get(CACHE_KB_TEXT), timestamp: cachedTimestamp };
 }
 
 function registrarPerguntaSemResposta(pergunta, historico, respostaIA) {
@@ -332,79 +359,124 @@ RESPOSTA: ${resposta}
  ***************************************************/
 
 /**
- * Gerencia a leitura e escrita dos embeddings em um arquivo JSON no Drive.
- * Se o arquivo 'conhecimento.txt' mudou, ele regenera tudo e salva.
- * Se não mudou, ele lê direto do JSON (Zero custo de API).
+ * Carrega embeddings do CacheService. Retorna null em caso de cache miss.
+ * Os chunks são distribuídos em várias chaves para contornar o limite de 100 KB por entrada.
+ */
+function carregarEmbeddingsDoCache(fileTimestamp) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const metaStr = cache.get(CACHE_EMB_META);
+    if (!metaStr) return null;
+    const meta = JSON.parse(metaStr);
+    if (!meta || meta.timestamp !== fileTimestamp || !meta.totalPages) return null;
+    const allChunks = [];
+    for (let i = 0; i < meta.totalPages; i++) {
+      const pageStr = cache.get(CACHE_EMB_PAGE_PFX + i);
+      if (!pageStr) return null; // Página expirou — cache miss total
+      allChunks.push(...JSON.parse(pageStr));
+    }
+    Logger.log(`✅ ${allChunks.length} embeddings carregados do CacheService.`);
+    return allChunks;
+  } catch (e) {
+    Logger.log(`⚠️ Erro ao carregar embeddings do cache: ${e}`);
+    return null;
+  }
+}
+
+/**
+ * Persiste embeddings no CacheService dividindo em páginas de até EMB_CHUNKS_PER_PAGE chunks.
+ * Falha silenciosa: se o cache não aceitar, o sistema continua lendo do Drive normalmente.
+ */
+function salvarEmbeddingsNoCache(fileTimestamp, chunks) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const totalPages = Math.ceil(chunks.length / EMB_CHUNKS_PER_PAGE);
+    // Salva meta primeiro: se uma página falhar, a próxima leitura detecta a inconsistência
+    cache.put(CACHE_EMB_META, JSON.stringify({ timestamp: fileTimestamp, totalPages }), CACHE_TTL);
+    for (let i = 0; i < totalPages; i++) {
+      const page = chunks.slice(i * EMB_CHUNKS_PER_PAGE, (i + 1) * EMB_CHUNKS_PER_PAGE);
+      cache.put(CACHE_EMB_PAGE_PFX + i, JSON.stringify(page), CACHE_TTL);
+    }
+    Logger.log(`✅ ${chunks.length} embeddings salvos no CacheService em ${totalPages} página(s).`);
+  } catch (e) {
+    Logger.log(`⚠️ Não foi possível salvar embeddings no CacheService: ${e}`);
+  }
+}
+
+/**
+ * Retorna os chunks com embeddings usando a seguinte hierarquia de velocidade:
+ *   1. CacheService (mais rápido, sem I/O de Drive)
+ *   2. Arquivo JSON no Drive   (lento, mas persiste entre instâncias)
+ *   3. Geração via Gemini API  (só acontece quando o conhecimento muda)
  */
 function recuperarOuGerarEmbeddings(folder, fullText, fileTimestamp) {
-  // 1. Tenta encontrar o arquivo JSON de embeddings
-  const files = folder.getFilesByName(EMBEDDINGS_FILE_NAME);
-  let dbEmbeddings = null;
-  let precisaRegerar = false;
+  const cache = CacheService.getScriptCache();
 
-  if (files.hasNext()) {
-    const file = files.next();
+  // 1. Verifica o CacheService primeiro (evita leitura do Drive na maioria das requisições)
+  const cachedChunks = carregarEmbeddingsDoCache(fileTimestamp);
+  if (cachedChunks) return cachedChunks;
+
+  // 2. Tenta localizar o arquivo JSON de embeddings no Drive via ID em cache
+  let existingFile = null;
+  const cachedFileId = cache.get(CACHE_EMB_FILE_ID);
+  if (cachedFileId) {
     try {
-      const jsonContent = file.getBlob().getDataAsString();
-      const data = JSON.parse(jsonContent);
-      
-      // Verifica se a versão salva é compatível com o arquivo de texto atual
-      if (data.timestamp === fileTimestamp && data.chunks && data.chunks.length > 0) {
-        Logger.log("Usando embeddings cacheados do Drive (Rápido!)");
-        return data.chunks; // RETORNO RÁPIDO
-      } else {
-        Logger.log("🔄 O arquivo de texto mudou. É necessário regenerar os embeddings...");
-        precisaRegerar = true;
-        // Opcional: Deletar o antigo para não acumular lixo
-        file.setTrashed(true);
-      }
+      existingFile = DriveApp.getFileById(cachedFileId);
     } catch (e) {
-      Logger.log("⚠️ Erro ao ler JSON de embeddings (corrompido?). Regenerando...");
-      precisaRegerar = true;
+      cache.remove(CACHE_EMB_FILE_ID);
+    }
+  }
+  if (!existingFile) {
+    const files = folder.getFilesByName(EMBEDDINGS_FILE_NAME);
+    if (files.hasNext()) {
+      existingFile = files.next();
+      cache.put(CACHE_EMB_FILE_ID, existingFile.getId(), CACHE_TTL);
+    }
+  }
+
+  if (existingFile) {
+    try {
+      const data = JSON.parse(existingFile.getBlob().getDataAsString());
+      if (data.timestamp === fileTimestamp && data.chunks && data.chunks.length > 0) {
+        Logger.log(`✅ ${data.chunks.length} embeddings carregados do Drive. Salvando no cache...`);
+        salvarEmbeddingsNoCache(fileTimestamp, data.chunks);
+        return data.chunks;
+      }
+      Logger.log("🔄 Embeddings desatualizados. Regenerando...");
+      existingFile.setTrashed(true);
+      cache.remove(CACHE_EMB_FILE_ID);
+    } catch (e) {
+      Logger.log(`⚠️ Erro ao ler JSON de embeddings (corrompido?). Regenerando... ${e}`);
     }
   } else {
     Logger.log("🆕 Nenhum arquivo de embeddings encontrado. Gerando pela primeira vez...");
-    precisaRegerar = true;
   }
 
-  // 2. Se chegou aqui, precisa gerar novos embeddings (Lento, mas só acontece 1 vez)
-  if (precisaRegerar) {
-    const chunks = chunkText(fullText); 
-    const baseDeDados = [];
+  // 3. Gera novos embeddings (acontece apenas quando o documento de conhecimento muda)
+  const chunks = chunkText(fullText);
+  const baseDeDados = [];
+  Logger.log(`🔨 Gerando embeddings para ${chunks.length} chunks...`);
 
-    Logger.log(`🔨 Iniciando geração de embeddings para ${chunks.length} pedaços de texto...`);
-
-    for (let i = 0; i < chunks.length; i++) {
-      // Pequena pausa para evitar rate limit durante a geração em massa
-      Utilities.sleep(1500); 
-      
-      const vetor = generateEmbedding(chunks[i]);
-      
-      // Só salva se o vetor for válido
-      if (vetor && vetor.length > 0) {
-        baseDeDados.push({
-          text: chunks[i],
-          embedding: vetor
-        });
-      } else {
-         Logger.log(`⚠️ Falha ao gerar vetor para o chunk ${i}. Ignorando.`);
-      }
+  for (let i = 0; i < chunks.length; i++) {
+    if (i > 0) Utilities.sleep(500); // Pausa para respeitar o rate limit da API de Embeddings.
+    // Erros 429 são tratados automaticamente pelo fetchWithRetry com backoff exponencial.
+    const vetor = generateEmbedding(chunks[i]);
+    if (vetor && vetor.length > 0) {
+      baseDeDados.push({ text: chunks[i], embedding: vetor });
+    } else {
+      Logger.log(`⚠️ Falha ao gerar vetor para o chunk ${i}. Ignorando.`);
     }
-
-    // 3. Salva o resultado no Drive para o futuro
-    if (baseDeDados.length > 0) {
-      const payload = {
-        timestamp: fileTimestamp, // A "assinatura" da versão
-        chunks: baseDeDados
-      };
-      folder.createFile(EMBEDDINGS_FILE_NAME, JSON.stringify(payload), "application/json");
-      Logger.log("💾 Novos embeddings salvos no Drive com sucesso!");
-    }
-    
-    return baseDeDados;
   }
 
-  return [];
+  if (baseDeDados.length > 0) {
+    const payload = { timestamp: fileTimestamp, chunks: baseDeDados };
+    const newFile = folder.createFile(EMBEDDINGS_FILE_NAME, JSON.stringify(payload), "application/json");
+    cache.put(CACHE_EMB_FILE_ID, newFile.getId(), CACHE_TTL);
+    salvarEmbeddingsNoCache(fileTimestamp, baseDeDados);
+    Logger.log("💾 Novos embeddings salvos no Drive e no CacheService.");
+  }
+
+  return baseDeDados;
 }
 
 function encontrarContextoRelevante(pergunta) {
@@ -579,10 +651,8 @@ function responderPergunta(pergunta, historico, modo) {
     let systemInstruction;
     if (modo === 'Ensinar') {
       systemInstruction = promptEnsinar;
-      Logger.log("🧠 Modo 'Ensinar' ativado.");
     } else {
       systemInstruction = promptInformar;
-      Logger.log("🧠 Modo 'Informar' (padrão) ativado.");
     }
 
     const promptParaUsuario = `
@@ -749,7 +819,6 @@ function doGet(e) {
 
   // Autenticação gerenciada pelo Google Script (baseada no e-mail do usuário)
   template.isAdmin = true;
-  template.senhaAutenticada = "";
 
   // --- CARREGAMENTO DE IMAGENS ---
   Logger.log(`Buscando ${LOGO_FILE_NAME}...`);
