@@ -33,6 +33,11 @@ const REPORT_FEEDBACK_FILE_NAME = "Relatorio_Feedback_IA.txt";
 // Persiste os vetores de embedding no Drive para não regenerá-los a cada deploy
 const EMBEDDINGS_FILE_NAME = "embeddings_db.json";
 
+// --- CONFIGURAÇÃO DO GOOGLE SHEETS PARA LOGS ---
+// Crie uma Planilha com duas abas: "Perguntas_Falhas" e "Feedbacks"
+// Cole o ID da planilha (código na URL do navegador) abaixo:
+const SPREADSHEET_LOG_ID = props.getProperty('SPREADSHEET_LOG_ID') || '';
+
 // --- CHAVES DO CACHESERVICE (nomes curtos = menos overhead) ---
 const CACHE_TTL           = 21600; // 6 horas
 const CACHE_FOLDER_ID     = 'kf_folder_id';
@@ -51,35 +56,48 @@ const EMB_CHUNKS_PER_PAGE = 5; // 5 × 11 KB ≈ 55 KB — margem segura
  *  FUNÇÕES AUXILIARES
  ***************************************************/
 
-function chunkText(text, maxLength = 1500) {
+function chunkText(text, maxLength = 1500, overlap = 300) {
+  if (!text) return [];
   const chunks = [];
-  const paragraphs = text.split(/\n\s*\n/);
-  let currentChunk = "";
+  let startIndex = 0;
 
-  for (const paragraph of paragraphs) {
-    if (paragraph.length > maxLength) {
-      // Parágrafo maior que o limite: divide por sentenças antes de agrupar
-      if (currentChunk.length > 0) {
-        chunks.push(currentChunk.trim());
-        currentChunk = "";
+  while (startIndex < text.length) {
+    let endIndex = startIndex + maxLength;
+
+    if (endIndex < text.length) {
+      // Tenta quebrar em um parágrafo
+      let breakPoint = text.lastIndexOf('\n\n', endIndex);
+
+      // Se não achar parágrafo, tenta quebrar em um ponto final
+      if (breakPoint <= startIndex) {
+        breakPoint = text.lastIndexOf('. ', endIndex);
       }
-      const sentences = paragraph.match(/[^.!?]+[.!?]*/g) || [paragraph];
-      for (const sentence of sentences) {
-        if ((currentChunk.length + sentence.length) < maxLength) {
-          currentChunk += sentence + " ";
-        } else {
-          if (currentChunk.length > 0) chunks.push(currentChunk.trim());
-          currentChunk = sentence + " ";
-        }
+
+      // Se não achar ponto final, quebra no último espaço vazio (não corta palavras ao meio)
+      if (breakPoint <= startIndex) {
+        breakPoint = text.lastIndexOf(' ', endIndex);
       }
-    } else if ((currentChunk.length + paragraph.length) < maxLength) {
-      currentChunk += paragraph + "\n\n";
-    } else {
-      if (currentChunk.length > 0) chunks.push(currentChunk.trim());
-      currentChunk = paragraph + "\n\n";
+
+      // Se achou um ponto de quebra válido, ajusta o endIndex
+      if (breakPoint > startIndex) {
+        endIndex = breakPoint + 1;
+      }
+    }
+
+    const chunk = text.slice(startIndex, endIndex).trim();
+    if (chunk) chunks.push(chunk);
+
+    // O pulo do gato: Avança o índice, mas volta um pouco (overlap) para não perder o contexto
+    startIndex = endIndex - overlap;
+
+    // Trava de segurança: se o texto terminou nesse chunk, encerra o loop
+    if (endIndex >= text.length) break;
+
+    // Trava de segurança para evitar loop infinito (caso overlap >= maxLength)
+    if (startIndex <= endIndex - maxLength) {
+      startIndex = endIndex;
     }
   }
-  if (currentChunk.length > 0) chunks.push(currentChunk.trim());
   return chunks;
 }
 
@@ -272,85 +290,46 @@ function getKnowledgeBaseAndTimestamp() {
 
 function registrarPerguntaSemResposta(pergunta, historico, respostaIA) {
   try {
-    const folder = getKnowledgeFolder();
-    if (!folder) {
-      Logger.log("❌ Não foi possível registrar a pergunta. Pasta de conhecimento não encontrada.");
+    const sheet = SpreadsheetApp.openById(SPREADSHEET_LOG_ID).getSheetByName('Perguntas_Falhas');
+    if (!sheet) {
+      Logger.log("Aba 'Perguntas_Falhas' não encontrada na planilha.");
       return;
     }
-    const reportFiles = folder.getFilesByName(REPORT_FILE_NAME);
-    
-    let historicoFormatado = "Nenhum histórico anterior.\n";
+
+    let historicoFormatado = "Sem histórico";
     if (historico && historico.length > 0) {
       historicoFormatado = historico
-        .map(item => `${item.role === 'user' ? 'USUÁRIO' : 'IA'}: ${item.parts[0].text}`)
-        .join('\n') + '\n';
+        .map(item => `${item.role === 'user' ? 'U' : 'IA'}: ${item.parts[0].text}`)
+        .join('\n');
     }
 
-    const newEntry = `
-    --- REGISTRO: ${new Date().toLocaleString('pt-BR')} ---
-    HISTÓRICO DA CONVERSA:
-    ${historicoFormatado}
-    PERGUNTA ATUAL: ${pergunta}
-    RESPOSTA DA IA (FALHA): ${respostaIA}
-    --- FIM REGISTRO ---\n
-    `;
-    
-    let file;
-    if (reportFiles.hasNext()) {
-      file = reportFiles.next();
-      const currentContent = file.getBlob().getDataAsString('UTF-8');
-      file.setContent(currentContent + newEntry);
-    } else {
-      file = folder.createFile(REPORT_FILE_NAME, newEntry, 'text/plain');
-    }
-    Logger.log(`📝 Pergunta registrada no relatório: ${REPORT_FILE_NAME}`);
+    // Grava: [Data/Hora, Pergunta, Resposta IA, Histórico]
+    sheet.appendRow([new Date(), pergunta, respostaIA, historicoFormatado]);
+    Logger.log("📝 Pergunta salva no Sheets com sucesso.");
   } catch (e) {
-    Logger.log(`❌ Erro ao registrar pergunta no relatório: ${e}`);
+    Logger.log(`❌ Erro ao registrar pergunta no Sheets: ${e}`);
   }
 }
 
 
 /**
- * Registra o feedback do usuário (like/dislike) em um arquivo de log separado.
+ * Registra o feedback do usuário (like/dislike) no Google Sheets.
  */
 function registrarFeedback(pergunta, resposta, feedback) {
   try {
-    
-    // Se o feedback for 'like', encerra a função e não salva nada.
-    if (feedback === 'like') {
-      Logger.log("ℹ️ Feedback 'like' recebido. Nenhuma ação necessária (não será salvo).");
-      return; 
-    }
-    // ----------------------
+    if (feedback === 'like') return; // Ignora likes para reduzir uso de armazenamento
 
-    const folder = getKnowledgeFolder();
-    if (!folder) {
-      Logger.log("❌ Não foi possível registrar o feedback. Pasta de conhecimento não encontrada.");
+    const sheet = SpreadsheetApp.openById(SPREADSHEET_LOG_ID).getSheetByName('Feedbacks');
+    if (!sheet) {
+      Logger.log("Aba 'Feedbacks' não encontrada na planilha.");
       return;
     }
-    const reportFiles = folder.getFilesByName(REPORT_FEEDBACK_FILE_NAME);
-    
-    const feedbackSimbolo = '👎'; 
 
-    const newEntry = `
---- FEEDBACK: ${new Date().toLocaleString('pt-BR')} ---
-FEEDBACK: ${feedbackSimbolo}
-PERGUNTA: ${pergunta}
-RESPOSTA: ${resposta}
---- FIM REGISTRO ---\n
-`;
-    
-    let file;
-    if (reportFiles.hasNext()) {
-      file = reportFiles.next();
-      const currentContent = file.getBlob().getDataAsString('UTF-8');
-      file.setContent(currentContent + newEntry);
-    } else {
-      file = folder.createFile(REPORT_FEEDBACK_FILE_NAME, newEntry, 'text/plain');
-    }
-    Logger.log(`📝 Feedback (${feedbackSimbolo}) registrado no relatório: ${REPORT_FEEDBACK_FILE_NAME}`);
+    // Grava: [Data/Hora, Tipo (Dislike), Pergunta, Resposta]
+    sheet.appendRow([new Date(), feedback, pergunta, resposta]);
+    Logger.log("📝 Feedback salvo no Sheets com sucesso.");
   } catch (e) {
-    Logger.log(`❌ Erro ao registrar feedback no relatório: ${e}`);
+    Logger.log(`❌ Erro ao registrar feedback no Sheets: ${e}`);
   }
 }
 
@@ -506,8 +485,8 @@ function encontrarContextoRelevante(pergunta) {
   }
 
   // 4. Calcula a similaridade (Matemática pura, muito rápido localmente)
-  const TOP_K = 3; // Limite de chunks recuperados. Valores acima de 3 podem causar erros na API em cenários de alta carga.
-  const SIMILARITY_THRESHOLD_FOR_RETRIEVAL = 0.3; 
+  const TOP_K = 6; // Aumentado de 3 para 6 para dar mais contexto à IA
+  const SIMILARITY_THRESHOLD_FOR_RETRIEVAL = 0.25; // Reduzido de 0.3 para ser um pouco mais flexível na busca
   
   const allSimilarities = chunksComVector.map(item => {
     return {
@@ -867,4 +846,28 @@ function doGet(e) {
 
   Logger.log("=========================================");
   return htmlOutput;
+}
+
+/**
+ * Execute esta função MANUALMENTE no editor sempre que alterar o conhecimento.txt no Drive.
+ * Ela regenera os embeddings em background, mantendo o chat sempre rápido para os usuários.
+ */
+function forcarAtualizacaoBaseDeConhecimento() {
+  Logger.log("Iniciando atualização forçada dos embeddings...");
+
+  const folder = getKnowledgeFolder();
+  if (!folder) return Logger.log("Pasta não encontrada.");
+
+  const files = folder.getFilesByName(KNOWLEDGE_FILE_NAME);
+  if (!files.hasNext()) return Logger.log("Arquivo de conhecimento não encontrado.");
+
+  const file = files.next();
+  const fileContent = file.getBlob().getDataAsString('UTF-8');
+  const timestamp = file.getLastUpdated().toISOString();
+
+  // Como estamos rodando manualmente, não importa se demorar alguns minutos.
+  // A função recuperarOuGerarEmbeddings vai deletar o JSON velho e criar um novo.
+  recuperarOuGerarEmbeddings(folder, fileContent, timestamp);
+
+  Logger.log("✅ Atualização concluída com sucesso! O chat está pronto e rápido para os usuários.");
 }
