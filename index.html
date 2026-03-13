@@ -595,13 +595,15 @@
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-3.5 12c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.5-6.5c-.83 0-1.5-.67-1.5-1.5S11.17 4.5 12 4.5s1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm3.5 6.5c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z"/></svg>
           <? } ?>
         </div>
-        <div class="message-content">
-          <p>Olá! Eu sou o assistente virtual do DRA. Como posso ajudar?</p>
-          <div class="suggested-questions">
-            <button class="suggestion-chip" onclick="usarSugestao(this)">Como faço minha matrícula?</button>
-            <button class="suggestion-chip" onclick="usarSugestao(this)">Quais documentos preciso entregar?</button>
-            <button class="suggestion-chip" onclick="usarSugestao(this)">Como solicitar histórico escolar?</button>
-            <button class="suggestion-chip" onclick="usarSugestao(this)">Como funciona o trancamento de matrícula?</button>
+        <div class="message-wrapper" style="display: flex; flex-direction: column; gap: 8px; flex-grow: 1;">
+          <div class="message-content">
+            <p>Olá! Eu sou o assistente virtual do DRA. Como posso ajudar?</p>
+            <div class="suggested-questions">
+              <button class="suggestion-chip" onclick="usarSugestao(this)">Como faço minha matrícula?</button>
+              <button class="suggestion-chip" onclick="usarSugestao(this)">Quais documentos preciso entregar?</button>
+              <button class="suggestion-chip" onclick="usarSugestao(this)">Como solicitar histórico escolar?</button>
+              <button class="suggestion-chip" onclick="usarSugestao(this)">Como funciona o trancamento de matrícula?</button>
+            </div>
           </div>
         </div>
       </div>
@@ -680,19 +682,22 @@
   const aiAvatarHTML = <?= aiAvatarString ?>;
   
   const firstMessageHTML = `
-      <div class="message ai-message">
-        <div class="avatar">
-          ${aiAvatarHTML}
-        </div>
-        <div class="message-content">
-          <p>Olá! Eu sou o assistente virtual do DRA. Como posso ajudar?</p>
-          <div class="suggested-questions">
-            <button class="suggestion-chip" onclick="usarSugestao(this)">Como faço minha matrícula?</button>
-            <button class="suggestion-chip" onclick="usarSugestao(this)">Quais documentos preciso entregar?</button>
-            <button class="suggestion-chip" onclick="usarSugestao(this)">Como solicitar histórico escolar?</button>
-            <button class="suggestion-chip" onclick="usarSugestao(this)">Como funciona o trancamento de matrícula?</button>
-          </div>
-        </div>`;
+  <div class="message ai-message">
+    <div class="avatar">
+      ${aiAvatarHTML}
+    </div>
+    <div class="message-wrapper" style="display: flex; flex-direction: column; gap: 8px; flex-grow: 1;">
+      <div class="message-content">
+        <p>Olá! Eu sou o assistente virtual do DRA. Como posso ajudar?</p>
+      </div>
+      <div class="suggested-questions">
+        <button class="suggestion-chip" onclick="usarSugestao(this)">Como faço minha matrícula?</button>
+        <button class="suggestion-chip" onclick="usarSugestao(this)">Quais documentos preciso entregar?</button>
+        <button class="suggestion-chip" onclick="usarSugestao(this)">Como solicitar histórico escolar?</button>
+        <button class="suggestion-chip" onclick="usarSugestao(this)">Como funciona o trancamento de matrícula?</button>
+      </div>
+    </div>
+  </div>`;
   
   
   perguntaTextarea.addEventListener('keydown', function(event) {
