@@ -13,10 +13,10 @@
 const props = PropertiesService.getScriptProperties();
 const GEMINI_API_KEY = props.getProperty('GEMINI_API_KEY');
 
-const EMBEDDING_MODEL = 'models/text-embedding-004';
+const EMBEDDING_MODEL = 'models/text-embedding-001';
 
 
-const GENERATIVE_MODEL = 'models/gemini-flash-latest'; 
+const GENERATIVE_MODEL = 'models/gemiine-2.5-flash'; 
 
 // --- CONFIGURAÇÕES DE ARQUIVOS DO DRIVE ---
 const DRIVE_FOLDER_NAME = "I.A conhecimento";
