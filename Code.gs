@@ -761,21 +761,6 @@ function responderPergunta(pergunta, historico, modo) {
     return "😔 Ocorreu um problema técnico inesperado. Por favor, informe ao colaborador responsável.";
   }
 }
-
-
-/***************************************************
- * FUNÇÃO DE TESTE (Não use "Executar" nela)
- ***************************************************/
- //para ver se tudo está funcional
-function testarChat() {
-  Logger.log("--- INICIANDO TESTE DE CHAT COM HISTÓRICO ---");
-  let historico = [];
-  let pergunta1 = "Olá, tudo bem? O que você faz?";
-  Logger.log(`P1 (Usuário): ${pergunta1}`);
-  let resposta1 = responderPergunta(pergunta1, historico);
-  Logger.log(`R1 (IA): ${resposta1}`);
-}
-
 /***************************************************
  * FUNÇÃO DE DIAGNÓSTICO: LISTAR MODELOS
  ***************************************************/
@@ -808,6 +793,49 @@ function listarModelosDisponiveis() {
     Logger.log(`🚨 Erro crítico na execução: ${e.message}`);
   }
 }
+// Função unificada para testar o "Cérebro" do Chat
+function executarTestesDeSistema() {
+  Logger.log("========= 🚀 INICIANDO SUÍTE DE TESTES =========");
+  
+  const perguntaTeste = "Qual o procedimento para abrir um chamado?"; // Mude para algo do seu PDF/TXT
+  Logger.log(`📌 Pergunta de Teste: "${perguntaTeste}"`);
+
+  // --- TESTE 1: O RAG (Busca de Contexto) ---
+  // É vital saber se os Embeddings estão achando o texto certo antes de culpar a IA.
+  Logger.log("\n--- TESTE 1: Recuperação de Contexto (Embeddings) ---");
+  try {
+    const resultadoBusca = encontrarContextoRelevante(perguntaTeste);
+    Logger.log(`✅ Chunks retornados: ${resultadoBusca.contextos.length}`);
+    Logger.log(`✅ Maior Similaridade: ${resultadoBusca.maiorSimilaridade.toFixed(4)}`);
+    if (resultadoBusca.contextos.length > 0) {
+      Logger.log(`Trecho mais relevante encontrado:\n"${resultadoBusca.contextos[0].substring(0, 150)}..."`);
+    } else {
+      Logger.log("⚠️ AVISO: Nenhum contexto foi achado. O documento não tem essa informação ou o limite de similaridade está muito alto.");
+    }
+  } catch (e) {
+    Logger.log(`❌ Falha no Teste 1: ${e}`);
+  }
+
+  // --- TESTE 2: Geração de Resposta (Modo Informar) ---
+  Logger.log("\n--- TESTE 2: Geração de Resposta (Modo Informar) ---");
+  try {
+    const respostaInformar = responderPergunta(perguntaTeste, [], 'Informar');
+    Logger.log(`✅ Resposta do Assistente:\n${respostaInformar}`);
+  } catch (e) {
+    Logger.log(`❌ Falha no Teste 2: ${e}`);
+  }
+
+  // --- TESTE 3: Geração de Resposta (Modo Ensinar) ---
+  Logger.log("\n--- TESTE 3: Geração de Resposta (Modo Ensinar) ---");
+  try {
+    const respostaEnsinar = responderPergunta(perguntaTeste, [], 'Ensinar');
+    Logger.log(`✅ Resposta do Mentor:\n${respostaEnsinar}`);
+  } catch (e) {
+    Logger.log(`❌ Falha no Teste 3: ${e}`);
+  }
+
+  Logger.log("\n========= 🏁 TESTES CONCLUÍDOS =========");
+}
 /***************************************************
  * FUNÇÃO DE ENTRADA DO APLICATIVO WEB 
  ***************************************************/
@@ -839,48 +867,4 @@ function doGet(e) {
 
   Logger.log("=========================================");
   return htmlOutput;
-}
-
-
-/***************************************************
- * FUNÇÃO DE TESTE
- * Para executar:
- * 1. Salve o arquivo.
- * 2. No editor do Apps Script, recarregue a página se necessário.
- * 3. No menu de seleção de funções (ao lado de "Depurar"), 
- * escolha "testarResponderPergunta".
- * 4. Clique em "Executar".
- * 5. Veja o resultado do log aqui embaixo na "Pilha de execução".
- ***************************************************/
-function testarResponderPergunta() {
-  Logger.log("========= INICIANDO TESTE MANUAL =========");
-  
-  // --- SIMULAÇÃO ---
-  
-  // 1. Mude esta pergunta para algo que você sabe que 
-  //    está no seu documento "conhecimento.txt"
-  const perguntaTeste = "Qual o procedimento para abrir um chamado?";
-  
-  // 2. Simule um histórico (pode começar vazio)
-  const historicoTeste = []; 
-  
-  // 3. Simule o modo ('Informar' ou 'Ensinar')
-  const modoTeste = 'Informar';
-  
-  Logger.log(`Testando com: "${perguntaTeste}", Modo: ${modoTeste}`);
-  
-  // --- EXECUÇÃO ---
-  try {
-    // Chamamos a função com os dados de teste
-    const resposta = responderPergunta(perguntaTeste, historicoTeste, modoTeste);
-    
-    Logger.log("========= TESTE CONCLUÍDO =========");
-    Logger.log("PERGUNTA: " + perguntaTeste);
-    Logger.log("RESPOSTA GERADA: ");
-    Logger.log(resposta); // Loga a resposta completa
-    
-  } catch (e) {
-    Logger.log("========= TESTE FALHOU COM ERRO CRÍTICO =========");
-    Logger.log(e);
-  }
 }
