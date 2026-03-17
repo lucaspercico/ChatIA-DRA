@@ -13,25 +13,19 @@
 const props = PropertiesService.getScriptProperties();
 const GEMINI_API_KEY = props.getProperty('GEMINI_API_KEY');
 
-const EMBEDDING_MODEL = 'models/text-embedding-001';
+const EMBEDDING_MODEL = 'models/gemini-embedding-001';
 
-
-const GENERATIVE_MODEL = 'models/gemiine-2.5-flash'; 
+const GENERATIVE_MODEL = 'models/gemini-2.5-flash'; 
 
 // --- CONFIGURAÇÕES DE ARQUIVOS DO DRIVE ---
 const DRIVE_FOLDER_NAME = "I.A conhecimento";
-const KNOWLEDGE_FILE_NAME = "conhecimento.txt";
-const REPORT_FILE_NAME = "Relatorio_Perguntas_Nao_Respondidas.txt";
+const KNOWLEDGE_FILE_NAME = "conhecimento";
 const LOGO_FILE_NAME = "logo.png"; 
-
-
-const BACKGROUND_FILE_NAME = "background.png"; // Seu arquivo se chama "fundo.png"
+const BACKGROUND_FILE_NAME = "background.png"; 
 const AVATAR_AI_FILE_NAME = "i.a.png"; 
 
-
-const REPORT_FEEDBACK_FILE_NAME = "Relatorio_Feedback_IA.txt";
 // Persiste os vetores de embedding no Drive para não regenerá-los a cada deploy
-const EMBEDDINGS_FILE_NAME = "embeddings_db.json";
+const EMBEDDINGS_FILE_NAME = "embeddings_v2.json";
 
 // --- CONFIGURAÇÃO DO GOOGLE SHEETS PARA LOGS ---
 // Crie uma Planilha com duas abas: "Perguntas_Falhas" e "Feedbacks"
@@ -49,14 +43,14 @@ const CACHE_EMB_META      = 'emb_meta';
 const CACHE_EMB_PAGE_PFX  = 'emb_p_';
 // Máximo de chunks por página de cache (cada página deve ficar abaixo de 100 KB)
 // text-embedding-004 = 768 floats ≈ 9 KB/vetor + ~1.5 KB de texto ≈ 11 KB/chunk
-const EMB_CHUNKS_PER_PAGE = 5; // 5 × 11 KB ≈ 55 KB — margem segura
+const EMB_CHUNKS_PER_PAGE = 9; // 5 × 11 KB ≈ 55 KB — margem segura
 
 
 /***************************************************
  *  FUNÇÕES AUXILIARES
  ***************************************************/
 
-function chunkText(text, maxLength = 1500, overlap = 300) {
+function chunkText(text, maxLength = 3000, overlap = 200) {
   if (!text) return [];
   const chunks = [];
   let startIndex = 0;
@@ -73,12 +67,11 @@ function chunkText(text, maxLength = 1500, overlap = 300) {
         breakPoint = text.lastIndexOf('. ', endIndex);
       }
 
-      // Se não achar ponto final, quebra no último espaço vazio (não corta palavras ao meio)
+      // Se não achar ponto final, quebra no último espaço vazio
       if (breakPoint <= startIndex) {
         breakPoint = text.lastIndexOf(' ', endIndex);
       }
 
-      // Se achou um ponto de quebra válido, ajusta o endIndex
       if (breakPoint > startIndex) {
         endIndex = breakPoint + 1;
       }
@@ -87,13 +80,10 @@ function chunkText(text, maxLength = 1500, overlap = 300) {
     const chunk = text.slice(startIndex, endIndex).trim();
     if (chunk) chunks.push(chunk);
 
-    // O pulo do gato: Avança o índice, mas volta um pouco (overlap) para não perder o contexto
     startIndex = endIndex - overlap;
 
-    // Trava de segurança: se o texto terminou nesse chunk, encerra o loop
     if (endIndex >= text.length) break;
 
-    // Trava de segurança para evitar loop infinito (caso overlap >= maxLength)
     if (startIndex <= endIndex - maxLength) {
       startIndex = endIndex;
     }
@@ -168,23 +158,34 @@ function fetchWithRetry(url, options, maxRetries = 3) {
  ***************************************************/
 
 function generateEmbedding(text) {
+  if (!text || !GEMINI_API_KEY) {
+    Logger.log("❌ Erro: Texto vazio ou GEMINI_API_KEY não configurada nas Propriedades do Script.");
+    return [];
+  }
+
+
   const url = `https://generativelanguage.googleapis.com/v1beta/${EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`;
+  
   const options = {
     method: "POST",
     contentType: "application/json",
     payload: JSON.stringify({ content: { parts: [{ text: text }] } }),
     muteHttpExceptions: true
   };
+
   try {
-    const data = fetchWithRetry(url, options);
+    const response = UrlFetchApp.fetch(url, options);
+    const data = JSON.parse(response.getContentText());
+
     if (data.error) {
-      Logger.log(`❌ Erro na API Embedding: ${data.error.message}`);
-      throw new Error(data.error.message);
+      Logger.log(`❌ Erro na API (Bloco de texto): ${data.error.message}`);
+      return [];
     }
+    
     return data?.embedding?.values || [];
   } catch (e) {
-    Logger.log("❌ Erro ao gerar embedding (após retentativas): " + e);
-    throw e;
+    Logger.log("❌ Falha na chamada de embedding: " + e);
+    return [];
   }
 }
 
@@ -254,16 +255,17 @@ function getKnowledgeBaseAndTimestamp() {
   const folder = getKnowledgeFolder();
   if (!folder) return { text: null, timestamp: null };
 
-  // Tenta obter o arquivo diretamente pelo ID em cache (evita getFilesByName a cada chamada)
   let file = null;
   const cachedFileId = cache.get(CACHE_KB_FILE_ID);
+  
   if (cachedFileId) {
     try {
       file = DriveApp.getFileById(cachedFileId);
     } catch (e) {
-      cache.remove(CACHE_KB_FILE_ID); // ID inválido
+      cache.remove(CACHE_KB_FILE_ID);
     }
   }
+
   if (!file) {
     const files = folder.getFilesByName(KNOWLEDGE_FILE_NAME);
     if (!files.hasNext()) {
@@ -278,8 +280,13 @@ function getKnowledgeBaseAndTimestamp() {
   const cachedTimestamp = cache.get(CACHE_KB_TIMESTAMP);
 
   if (fileLastUpdated !== cachedTimestamp) {
-    Logger.log("🔄 Base de conhecimento alterada. Recarregando do Drive e atualizando o cache...");
-    const fileContent = file.getBlob().getDataAsString('UTF-8');
+    Logger.log("🔄 Google Doc alterado. Extraindo novo texto e atualizando o cache...");
+    
+    
+    const doc = DocumentApp.openById(file.getId());
+    const fileContent = doc.getBody().getText(); 
+    // ---------------------------
+
     cache.put(CACHE_KB_TEXT, fileContent, CACHE_TTL);
     cache.put(CACHE_KB_TIMESTAMP, fileLastUpdated, CACHE_TTL);
     return { text: fileContent, timestamp: fileLastUpdated };
@@ -290,24 +297,49 @@ function getKnowledgeBaseAndTimestamp() {
 
 function registrarPerguntaSemResposta(pergunta, historico, respostaIA) {
   try {
-    const sheet = SpreadsheetApp.openById(SPREADSHEET_LOG_ID).getSheetByName('Perguntas_Falhas');
-    if (!sheet) {
-      Logger.log("Aba 'Perguntas_Falhas' não encontrada na planilha.");
+    // 1. Garantia de ID: Busca novamente se estiver vazio
+    let sheetId = SPREADSHEET_LOG_ID;
+    if (!sheetId) {
+      sheetId = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_LOG_ID');
+    }
+
+    if (!sheetId) {
+      Logger.log("❌ Erro: SPREADSHEET_LOG_ID não definido.");
       return;
     }
 
-    let historicoFormatado = "Sem histórico";
-    if (historico && historico.length > 0) {
-      historicoFormatado = historico
-        .map(item => `${item.role === 'user' ? 'U' : 'IA'}: ${item.parts[0].text}`)
-        .join('\n');
+    const sheet = SpreadsheetApp.openById(sheetId).getSheetByName('Perguntas_Falhas');
+    if (!sheet) {
+      Logger.log("Aba 'Perguntas_Falhas' não encontrada.");
+      return;
     }
 
-    // Grava: [Data/Hora, Pergunta, Resposta IA, Histórico]
-    sheet.appendRow([new Date(), pergunta, respostaIA, historicoFormatado]);
-    Logger.log("📝 Pergunta salva no Sheets com sucesso.");
+    // 2. Map seguro para evitar erros de 'undefined'
+    let historicoFormatado = "Sem histórico";
+    if (Array.isArray(historico) && historico.length > 0) {
+      historicoFormatado = historico
+        .map(item => {
+          try {
+            const role = item.role === 'user' ? 'Usuário' : 'IA';
+            const texto = (item.parts && item.parts[0] && item.parts[0].text) ? item.parts[0].text : "[Conteúdo Vazio]";
+            return `${role}: ${texto}`;
+          } catch (e) { return "Erro no item do histórico"; }
+        })
+        .join('\n---\n');
+    }
+
+    // 3. Garantia de Strings (evita problemas com objetos brutos)
+    const row = [
+      new Date(), 
+      String(pergunta || ""), 
+      String(respostaIA || ""), 
+      String(historicoFormatado).substring(0, 30000) // Limite de célula do Sheets
+    ];
+
+    sheet.appendRow(row);
+    Logger.log("📝 Falha registrada com sucesso.");
   } catch (e) {
-    Logger.log(`❌ Erro ao registrar pergunta no Sheets: ${e}`);
+    Logger.log(`❌ Erro FATAL no registro: ${e.message}`);
   }
 }
 
@@ -388,23 +420,28 @@ function salvarEmbeddingsNoCache(fileTimestamp, chunks) {
  *   2. Arquivo JSON no Drive   (lento, mas persiste entre instâncias)
  *   3. Geração via Gemini API  (só acontece quando o conhecimento muda)
  */
+/**
+ * Retorna os chunks com embeddings usando a seguinte hierarquia:
+ * 1. CacheService | 2. Arquivo JSON no Drive | 3. Geração via Gemini API
+ */
 function recuperarOuGerarEmbeddings(folder, fullText, fileTimestamp) {
   const cache = CacheService.getScriptCache();
 
-  // 1. Verifica o CacheService primeiro (evita leitura do Drive na maioria das requisições)
+  // 1. Verifica o CacheService
   const cachedChunks = carregarEmbeddingsDoCache(fileTimestamp);
   if (cachedChunks) return cachedChunks;
 
-  // 2. Tenta localizar o arquivo JSON de embeddings no Drive via ID em cache
+  // 2. Tenta localizar o arquivo JSON no Drive
   let existingFile = null;
   const cachedFileId = cache.get(CACHE_EMB_FILE_ID);
   if (cachedFileId) {
-    try {
-      existingFile = DriveApp.getFileById(cachedFileId);
-    } catch (e) {
-      cache.remove(CACHE_EMB_FILE_ID);
+    try { 
+      existingFile = DriveApp.getFileById(cachedFileId); 
+    } catch (e) { 
+      cache.remove(CACHE_EMB_FILE_ID); 
     }
   }
+  
   if (!existingFile) {
     const files = folder.getFilesByName(EMBEDDINGS_FILE_NAME);
     if (files.hasNext()) {
@@ -415,44 +452,70 @@ function recuperarOuGerarEmbeddings(folder, fullText, fileTimestamp) {
 
   if (existingFile) {
     try {
-      const data = JSON.parse(existingFile.getBlob().getDataAsString());
+      const data = JSON.parse(existingFile.getBlob().getDataAsString('UTF-8'));
       if (data.timestamp === fileTimestamp && data.chunks && data.chunks.length > 0) {
-        Logger.log(`✅ ${data.chunks.length} embeddings carregados do Drive. Salvando no cache...`);
+        Logger.log(`✅ ${data.chunks.length} embeddings carregados do Drive.`);
         salvarEmbeddingsNoCache(fileTimestamp, data.chunks);
         return data.chunks;
       }
-      Logger.log("🔄 Embeddings desatualizados. Regenerando...");
+      Logger.log("🔄 Documento desatualizado. Removendo JSON antigo...");
       existingFile.setTrashed(true);
       cache.remove(CACHE_EMB_FILE_ID);
     } catch (e) {
-      Logger.log(`⚠️ Erro ao ler JSON de embeddings (corrompido?). Regenerando... ${e}`);
+      Logger.log(`⚠️ Erro ao ler JSON: ${e}`);
     }
-  } else {
-    Logger.log("🆕 Nenhum arquivo de embeddings encontrado. Gerando pela primeira vez...");
   }
 
-  // 3. Gera novos embeddings (acontece apenas quando o documento de conhecimento muda)
+  // 3. Geração de Novos Embeddings (Versão Estável com Logs)
   const chunks = chunkText(fullText);
   const baseDeDados = [];
-  Logger.log(`🔨 Gerando embeddings para ${chunks.length} chunks...`);
+  
+  Logger.log(`🔨 Iniciando geração para ${chunks.length} blocos...`);
 
   for (let i = 0; i < chunks.length; i++) {
-    if (i > 0) Utilities.sleep(500); // Pausa para respeitar o rate limit da API de Embeddings.
-    // Erros 429 são tratados automaticamente pelo fetchWithRetry com backoff exponencial.
-    const vetor = generateEmbedding(chunks[i]);
-    if (vetor && vetor.length > 0) {
-      baseDeDados.push({ text: chunks[i], embedding: vetor });
-    } else {
-      Logger.log(`⚠️ Falha ao gerar vetor para o chunk ${i}. Ignorando.`);
+    // Log de progresso ANTES da chamada para você saber o que está sendo processado
+    Logger.log(`⏳ Chamando API para Bloco ${i + 1} de ${chunks.length}...`);
+
+    if (i > 0) Utilities.sleep(800); // Pausa para evitar limite de quota
+    
+    try {
+      // Chamada da API isolada para não travar o loop em caso de erro único
+      const vetor = generateEmbedding(chunks[i]);
+      
+      if (vetor && vetor.length > 0) {
+        baseDeDados.push({ text: chunks[i], embedding: vetor });
+      } else {
+        Logger.log(`⚠️ Bloco ${i + 1} ignorado (vetor vazio).`);
+      }
+    } catch (e) {
+      Logger.log(`❌ Erro no bloco ${i + 1}: ${e}`);
     }
   }
 
+  // --- SALVAMENTO ROBUSTO ---
   if (baseDeDados.length > 0) {
-    const payload = { timestamp: fileTimestamp, chunks: baseDeDados };
-    const newFile = folder.createFile(EMBEDDINGS_FILE_NAME, JSON.stringify(payload), "application/json");
-    cache.put(CACHE_EMB_FILE_ID, newFile.getId(), CACHE_TTL);
-    salvarEmbeddingsNoCache(fileTimestamp, baseDeDados);
-    Logger.log("💾 Novos embeddings salvos no Drive e no CacheService.");
+    try {
+      Logger.log("💾 Gravando banco de dados de embeddings no Drive...");
+      const payload = { 
+        timestamp: fileTimestamp, 
+        chunks: baseDeDados,
+        info: "Gerado em " + new Date().toLocaleString()
+      };
+      
+      const jsonString = JSON.stringify(payload);
+      const newFile = folder.createFile(EMBEDDINGS_FILE_NAME, jsonString, MimeType.PLAIN_TEXT); 
+      
+      // Atualiza cache com o novo arquivo
+      cache.put(CACHE_EMB_FILE_ID, newFile.getId(), CACHE_TTL);
+      salvarEmbeddingsNoCache(fileTimestamp, baseDeDados);
+      
+      Logger.log(`✅ SUCESSO! Arquivo "${EMBEDDINGS_FILE_NAME}" criado.`);
+      return baseDeDados;
+    } catch (e) {
+      Logger.log(`❌ ERRO AO SALVAR NO DRIVE: ${e}`);
+    }
+  } else {
+    Logger.log("❌ Falha crítica: Nenhum embedding foi gerado.");
   }
 
   return baseDeDados;
@@ -485,7 +548,7 @@ function encontrarContextoRelevante(pergunta) {
   }
 
   // 4. Calcula a similaridade (Matemática pura, muito rápido localmente)
-  const TOP_K = 6; // Aumentado de 3 para 6 para dar mais contexto à IA
+  const TOP_K = 4; // Aumentado de 3 para 6 para dar mais contexto à IA
   const SIMILARITY_THRESHOLD_FOR_RETRIEVAL = 0.25; // Reduzido de 0.3 para ser um pouco mais flexível na busca
   
   const allSimilarities = chunksComVector.map(item => {
@@ -510,364 +573,4 @@ function encontrarContextoRelevante(pergunta) {
   const contextos = topChunks.map(item => item.chunk);
   const maiorSimilaridade = topChunks[0].similaridade;
   
-  Logger.log(`Retornando ${topChunks.length} chunks. Maior similaridade: ${maiorSimilaridade}`);
-  return { contextos: contextos, maiorSimilaridade: maiorSimilaridade };
-}
-
-
-function responderPergunta(pergunta, historico, modo) {
-
-  const MAX_PERGUNTA_LENGTH = 1000;
-
-  if (!pergunta || typeof pergunta !== 'string' || pergunta.trim().length === 0) {
-    return "❌ Pergunta inválida ou vazia.";
-  }
-
-  if (pergunta.length > MAX_PERGUNTA_LENGTH) {
-    return `❌ Pergunta muito longa. Por favor, limite sua pergunta a ${MAX_PERGUNTA_LENGTH} caracteres.`;
-  }
-
-  pergunta = pergunta.trim();
-
-  // Modo de operação: Informar (padrão) ou Ensinar
-  if (modo === 'Ensinar') {
-    Logger.log("🧠 Modo 'Ensinar' ativado por usuário.");
-  } else {
-    Logger.log("🧠 Modo 'Informar' (padrão) ativado.");
-  }
-
-  historico = historico || [];
-
-  try {
-    // 1. LÓGICA DE BUSCA DE CONTEXTO (RAG)
-    Logger.log(`Iniciando busca de contexto para: "${pergunta}"`);
-    
-    // Assume que a função encontrarContextoRelevante existe no seu código
-    const resultadoBusca = encontrarContextoRelevante(pergunta); 
-    const contextos = resultadoBusca.contextos; 
-    const similaridade = resultadoBusca.maiorSimilaridade; 
-    const contexto = contextos.join("\n\n---\n\n"); 
-    
-    // 2. Tratamento de erro do RAG
-    if (contextos.length === 1 && contextos[0].includes("Erro")) {
-      Logger.log(`Erro retornado pelo RAG: ${contextos[0]}`);
-      return contextos[0]; 
-    }
-
-    const SIMILARITY_THRESHOLD = 0.3;
-
-    // --- PROMPT da i.a 
-    const promptInformar = {
-      parts: [{ text: `
-        Você é um assistente virtual amigável e prestativo, especialista nos procedimentos do DRA. Sua tarefa é analisar a PERGUNTA do usuário, o HISTÓRICO da conversa e os dados de CONTEXTO e SIMILARIDADE para formular a melhor resposta. O HISTÓRICO é crucial. Se a pergunta for curta (ex: "e sobre X?", "por que?"), ela provavelmente se refere à sua resposta anterior. O CONTEXTO pode conter vários trechos do documento, separados por "---". Encontre a resposta relevante dentro deles.
-
-        REGRAS DE FORMATAÇÃO: Sempre formate suas respostas usando Markdown simples para facilitar a leitura. Use negrito para destacar termos importantes e listas com hífens (-) ou números (1., 2.) para passos ou itens. Não use cabeçalhos (#).
-
-        NOVA REGRA: TOM DE VOZ E ENCERRAMENTO:
-        Seja sempre amigável, prestativo e direto ao ponto.
-        Após dar a resposta (Regra 1) ou se não encontrar (Regra 2), sempre termine com uma pergunta amigável, como "Posso ajudar em algo mais?" ou "Isso esclarece sua dúvida?".
-
-        REGRAS DE COMPORTAMENTO:
-
-        PERGUNTA SOBRE O DRA (COM BOM CONTEXTO):
-        Se a PERGUNTA for sobre os procedimentos do DRA e a SIMILARIDADE for ALTA (acima de ${SIMILARITY_THRESHOLD}), use o CONTEXTO fornecido para responder.
-        Refine a Apresentação: Mesmo que o contexto seja um bloco de texto, use as regras de formatação (listas, negrito) para organizar a informação e torná-la fácil de ler.
-        Seja Fiel ao Contexto: Seja direto e claro. Não adicione informações que não estejam no contexto nem tente "ensinar" o porquê (esse é o trabalho do modo "Ensinar").
-
-        PERGUNTA SOBRE O DRA (COM CONTEXTO RUIM):
-        Se a PERGUNTA parece ser sobre o DRA, mas a SIMILARIDADE for BAIXA (abaixo de ${SIMILARITY_THRESHOLD}) ou o CONTEXTO não contiver a resposta, responda educadamente: "Hum, não consegui encontrar essa informação exata nos meus documentos."
-        Dê a Próxima Etapa: Em seguida, ajude o usuário sugerindo o modo "Ensinar". Diga: "Dica: Se você for um colaborador e achar que esta é uma informação que eu deveria saber, por favor, mude o seletor para o modo 'Ensinar' e envie a pergunta. Isso notificará um especialista para me treinar!"
-
-        PERGUNTAS "META" (SOBRE VOCÊ):
-        Se a PERGUNTA for sobre você, suas capacidades, ou saudações, responda de forma amigável e natural.
-        Explique que você é um assistente focado em ajudar com as dúvidas sobre os procedimentos do DRA.
-        (Ex: "Olá! Eu sou um assistente virtual e estou aqui para ajudar com perguntas sobre o DRA.")
-
-        PERGUNTAS FORA DE TÓPICO (NÃO RELACIONADAS):
-        Se a PERGUNTA NÃO tiver relação com o DRA, recuse educadamente.
-        Diga algo como: "Desculpe, mas só posso responder perguntas relacionadas aos procedimentos do DRA."
-      `}]
-    };
-
-    // --- PROMPT ENSINAR 
-    const promptEnsinar = {
-      parts: [{ text: `
-        Você é um Mentor Sênior especialista nos procedimentos do DRA. Sua principal função é ENSINAR o colaborador. Sua tarefa é analisar a PERGUNTA, o HISTÓRICO e os dados de CONTEXTO para formular uma resposta didática, como um professor. O HISTÓRICO é crucial. Se a pergunta for curta (ex: "e sobre X?"), ela provavelmente se refere à sua resposta anterior. O CONTEXTO pode conter vários trechos do documento, separados por "---".
-
-        REGRAS DE FORMATAÇÃO (Didática): Sempre formate suas respostas usando Markdown simples. Use negrito para destacar conceitos-chave. Use listas com números (1., 2.) para explicar passos (o "como chegar lá"). Use listas com hífens (-) para destacar pontos de atenção (o "o que cuidar", armadilhas, exceções).
-
-        REGRAS DE COMPORTAMENTO (ENSINAR):
-
-        CASO ESPECIAL (MODELOS DE RESPOSTA):
-        Se o CONTEXTO contiver claramente um modelo de resposta ou comunicado padrão (ex: "Prezado(a) Aluno(a), Documento anexado..."), sua tarefa principal é dupla:
-        1. Forneça o Modelo: Apresente o modelo de resposta exato para o colaborador, usando aspas ou um bloco de citação, para que ele aprenda o texto correto.
-        2. Ensine o "Porquê": Explique o motivo por trás dessa resposta. (Ex: "Quando o aluno solicitar X, este é o comunicado padrão que utilizamos.")
-        3. Refine a Explicação: O CONTEXTO foi escrito por um colaborador. Se a explicação dele sobre "quando usar" parecer confusa, não copie literalmente. Sua função de Mentor é refinar e simplificar a explicação, tornando-a mais clara.
-        4. Destaque "O que Cuidar": Use hífens (-) para explicar os pré-requisitos ou verificações necessárias antes de usar essa resposta. (Ex: "- Lembre-se de usar essa resposta apenas após a aprovação do preview, como o texto menciona.")
-
-        PERGUNTA SOBRE O DRA (COM BOM CONTEXTO GERAL):
-        (Se não for um modelo de resposta padrão)
-        Refine a Explicação: O CONTEXTO foi escrito por um colaborador. Se a linguagem dele parecer confusa, difícil ou muito técnica, não copie literalmente. Sua função de Mentor é refinar, simplificar e organizar essa informação para que o aprendizado seja fácil.
-        Explique o "Porquê": Tente explicar o motivo por trás do procedimento (se estiver implícito no contexto).
-        Destaque Passos: Se a pergunta for sobre um processo ("como fazer X"), detalhe os passos claramente (o "como chegar lá").
-        Destaque "O que Cuidar": Aponte armadilhas comuns, exceções ou detalhes importantes mencionados no CONTEXTO (o "o que cuidar").
-        Seja encorajador e claro.
-
-        PERGUNTA SOBRE O DRA (COM CONTEXTO RUIM):
-        Se a SIMILARIDADE for BAIXA (abaixo de ${SIMILARITY_THRESHOLD}) ou o CONTEXTO não contiver a resposta, responda educadamente: "Não encontrei essa informação no documento para poder ensiná-lo em detalhes."
-
-        PERGUNTAS "META" (SOBRE VOCÊ):
-        Responda de forma amigável. Explique que você é um assistente focado em ensinar os procedimentos do DRA.
-        (Ex: "Olá! Eu sou um assistente de ensino e estou aqui para ajudar você a entender a fundo os processos do DRA.")
-
-        PERGUNTAS FORA DE TÓPICO (NÃO RELACIONADAS):
-        Recuse educadamente.
-        Diga algo como: "Meu foco é ensinar sobre os procedimentos do DRA. Não consigo ajudar com esse tópico."
-      `}]
-    };
-
-    // 3. Lógica para escolher o prompt certo
-    let systemInstruction;
-    if (modo === 'Ensinar') {
-      systemInstruction = promptEnsinar;
-    } else {
-      systemInstruction = promptInformar;
-    }
-
-    const promptParaUsuario = `
-      ---
-      DADOS PARA ANÁLISE (RAG):
-      SIMILARIDADE (Do chunk Top-1): ${similaridade.toFixed(4)}
-      (Limite de confiança: ${SIMILARITY_THRESHOLD})
-      CONTEXTO (Top-${contextos.length} chunks encontrados):
-      ${contexto || "Nenhum contexto encontrado."}
-      ---
-      PERGUNTA:
-      ${pergunta}
-    `;
-
-    const url = `https://generativelanguage.googleapis.com/v1beta/${GENERATIVE_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-    
-    const contentsPayload = [
-      ...historico, 
-      { 
-        role: "user", 
-        parts: [{ text: promptParaUsuario }] 
-      }
-    ];
-
-    const payload = {
-      contents: contentsPayload,
-      systemInstruction: systemInstruction 
-    };
-    const options = {
-      method: 'POST',
-      contentType: 'application/json',
-      payload: JSON.stringify(payload),
-      muteHttpExceptions: true 
-    };
-    
-    // Assume que fetchWithRetry existe no seu código
-    const data = fetchWithRetry(url, options);
-
-    if (typeof data !== 'object' || data === null) {
-      Logger.log(`❌ Erro inesperado de fetchWithRetry. Retornou: ${data}`);
-      return `Erro no servidor: ${data}`;
-    }
-
-    if (data.error) {
-        Logger.log(`❌ Erro da API Gemini (JSON): ${data.error.message}`);
-        return `Erro ao chamar a API (JSON): ${data.error.message}`;
-    }
-    
-    const resposta = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    // --- SEGURANÇA (SAFETY FILTER) ---
-    if (!resposta) {
-      const finishReason = data?.candidates?.[0]?.finishReason;
-      Logger.log(`⚠️ A resposta está vazia. FinishReason: ${finishReason}`);
-      
-      if (finishReason === "SAFETY") {
-        return "❌ A sua solicitação foi bloqueada por motivos de segurança. Por favor, reformule sua pergunta.";
-      }
-      if (finishReason) {
-          return `❌ A resposta foi bloqueada pela API. Motivo: ${finishReason}`;
-      }
-    }
-
-    // --- REGISTRO DE RESPOSTAS FALHAS ---
-    if (resposta) {
-      const respostaLower = resposta.toLowerCase();
-      
-      const isFailure = respostaLower.includes("não encontrei") || 
-                        respostaLower.includes("não está detalhado") ||
-                        respostaLower.includes("não consta no") ||
-                        respostaLower.includes("não localizei");
-
-      const isRefusal = respostaLower.includes("só posso responder") ||
-                        respostaLower.includes("fui treinado apenas");
-
-      if (isFailure && !isRefusal) {
-        Logger.log("Registrando pergunta (IA não encontrou no RAG - Genérico)...");
-        // Assume que esta função existe no código
-        registrarPerguntaSemResposta(pergunta, historico, resposta);
-      }
-    }
-
-    return resposta || "Não foi possível gerar uma resposta.";
-
-  } catch (e) {
-    // --- TRATAMENTO DE ERROS ---
-    Logger.log('❌ Erro capturado em responderPergunta: ' + e);
-    const msgErro = (e.message || e.toString()).toLowerCase();
-
-    if (msgErro.includes("429") || msgErro.includes("quota") || msgErro.includes("resource_exhausted")) {
-      return "😅 Ufa, trabalhei bastante agora! Atingi meu limite de velocidade. Por favor, aguarde uns 2 minutinhos e tente perguntar novamente.";
-    }
-
-    if (msgErro.includes("503") || msgErro.includes("overloaded") || msgErro.includes("temporarily overloaded")) {
-      return "🚦 Meus servidores estão congestionados no momento. Tente enviar sua pergunta de novo em 1 minuto, por favor.";
-    }
-
-    if (msgErro.includes("safety") || msgErro.includes("blocked") || msgErro.includes("harmful")) {
-      return "🛡️ Por motivos de segurança e diretrizes de conteúdo, não posso gerar uma resposta para essa solicitação específica.";
-    }
-
-    if (msgErro.includes("key") || msgErro.includes("403") || msgErro.includes("api key") || msgErro.includes("invalid argument")) {
-      return "🔑 Parece haver um problema técnico com minha chave de acesso. Por favor, avise ao colaborador responsável.";
-    }
-
-    return "😔 Ocorreu um problema técnico inesperado. Por favor, informe ao colaborador responsável.";
-  }
-}
-/***************************************************
- * FUNÇÃO DE DIAGNÓSTICO: LISTAR MODELOS
- ***************************************************/
- // função usada para enontrar possiveis modelos 
-function listarModelosDisponiveis() {
-  if (!GEMINI_API_KEY) {
-    Logger.log('❌ Chave de API não encontrada nas Propriedades do Script.');
-    return;
-  }
-  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}`;
-  const options = {
-    method: 'GET',
-    muteHttpExceptions: true
-  };
-  try {
-    const response = UrlFetchApp.fetch(url, options);
-    const rawResponse = response.getContentText();
-    const data = JSON.parse(rawResponse);
-    if (data.error) {
-      Logger.log(`❌ Erro ao listar modelos: ${data.error.message}`);
-      return;
-    }
-    Logger.log('✅ Modelos disponíveis para sua chave:');
-    const formattedModels = data.models.map(model => ({
-      nome: model.name,
-      metodosSuportados: model.supportedGenerationMethods
-    }));
-    Logger.log(JSON.stringify(formattedModels, null, 2));
-  } catch (e) {
-    Logger.log(`🚨 Erro crítico na execução: ${e.message}`);
-  }
-}
-// Função unificada para testar o "Cérebro" do Chat
-function executarTestesDeSistema() {
-  Logger.log("========= 🚀 INICIANDO SUÍTE DE TESTES =========");
-  
-  const perguntaTeste = "Qual o procedimento para abrir um chamado?"; // Mude para algo do seu PDF/TXT
-  Logger.log(`📌 Pergunta de Teste: "${perguntaTeste}"`);
-
-  // --- TESTE 1: O RAG (Busca de Contexto) ---
-  // É vital saber se os Embeddings estão achando o texto certo antes de culpar a IA.
-  Logger.log("\n--- TESTE 1: Recuperação de Contexto (Embeddings) ---");
-  try {
-    const resultadoBusca = encontrarContextoRelevante(perguntaTeste);
-    Logger.log(`✅ Chunks retornados: ${resultadoBusca.contextos.length}`);
-    Logger.log(`✅ Maior Similaridade: ${resultadoBusca.maiorSimilaridade.toFixed(4)}`);
-    if (resultadoBusca.contextos.length > 0) {
-      Logger.log(`Trecho mais relevante encontrado:\n"${resultadoBusca.contextos[0].substring(0, 150)}..."`);
-    } else {
-      Logger.log("⚠️ AVISO: Nenhum contexto foi achado. O documento não tem essa informação ou o limite de similaridade está muito alto.");
-    }
-  } catch (e) {
-    Logger.log(`❌ Falha no Teste 1: ${e}`);
-  }
-
-  // --- TESTE 2: Geração de Resposta (Modo Informar) ---
-  Logger.log("\n--- TESTE 2: Geração de Resposta (Modo Informar) ---");
-  try {
-    const respostaInformar = responderPergunta(perguntaTeste, [], 'Informar');
-    Logger.log(`✅ Resposta do Assistente:\n${respostaInformar}`);
-  } catch (e) {
-    Logger.log(`❌ Falha no Teste 2: ${e}`);
-  }
-
-  // --- TESTE 3: Geração de Resposta (Modo Ensinar) ---
-  Logger.log("\n--- TESTE 3: Geração de Resposta (Modo Ensinar) ---");
-  try {
-    const respostaEnsinar = responderPergunta(perguntaTeste, [], 'Ensinar');
-    Logger.log(`✅ Resposta do Mentor:\n${respostaEnsinar}`);
-  } catch (e) {
-    Logger.log(`❌ Falha no Teste 3: ${e}`);
-  }
-
-  Logger.log("\n========= 🏁 TESTES CONCLUÍDOS =========");
-}
-/***************************************************
- * FUNÇÃO DE ENTRADA DO APLICATIVO WEB 
- ***************************************************/
-function doGet(e) {
-  Logger.log("=========================================");
-  Logger.log("🚀 doGet: Iniciando carregamento do Aplicativo Web.");
-  
-  const template = HtmlService.createTemplateFromFile('index');
-
-  // Autenticação gerenciada pelo Google Script (baseada no e-mail do usuário)
-  template.isAdmin = true;
-
-  // --- CARREGAMENTO DE IMAGENS ---
-  Logger.log(`Buscando ${LOGO_FILE_NAME}...`);
-  template.logoData = getImageData(LOGO_FILE_NAME); 
-  
-  Logger.log(`Buscando ${BACKGROUND_FILE_NAME}...`);
-  template.bgData = getImageData(BACKGROUND_FILE_NAME); 
-  
-  Logger.log(`Buscando ${AVATAR_AI_FILE_NAME}...`);
-  template.avatarAiData = getImageData(AVATAR_AI_FILE_NAME); 
-
-  Logger.log("✅ doGet: Dados injetados. Gerando HTML...");
-  
-  const htmlOutput = template.evaluate()
-      .setTitle('Assistente DRA - UNISUAM')
-      .addMetaTag('viewport', 'width=device-width, initial-scale=1')
-      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
-
-  Logger.log("=========================================");
-  return htmlOutput;
-}
-
-/**
- * Execute esta função MANUALMENTE no editor sempre que alterar o conhecimento.txt no Drive.
- * Ela regenera os embeddings em background, mantendo o chat sempre rápido para os usuários.
- */
-function forcarAtualizacaoBaseDeConhecimento() {
-  Logger.log("Iniciando atualização forçada dos embeddings...");
-
-  const folder = getKnowledgeFolder();
-  if (!folder) return Logger.log("Pasta não encontrada.");
-
-  const files = folder.getFilesByName(KNOWLEDGE_FILE_NAME);
-  if (!files.hasNext()) return Logger.log("Arquivo de conhecimento não encontrado.");
-
-  const file = files.next();
-  const fileContent = file.getBlob().getDataAsString('UTF-8');
-  const timestamp = file.getLastUpdated().toISOString();
-
-  // Como estamos rodando manualmente, não importa se demorar alguns minutos.
-  // A função recuperarOuGerarEmbeddings vai deletar o JSON velho e criar um novo.
-  recuperarOuGerarEmbeddings(folder, fileContent, timestamp);
-
-  Logger.log("✅ Atualização concluída com sucesso! O chat está pronto e rápido para os usuários.");
-}
+  Logger.log(`Retorn
