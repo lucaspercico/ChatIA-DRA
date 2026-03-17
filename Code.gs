@@ -573,4 +573,394 @@ function encontrarContextoRelevante(pergunta) {
   const contextos = topChunks.map(item => item.chunk);
   const maiorSimilaridade = topChunks[0].similaridade;
   
-  Logger.log(`Retorn
+  Logger.log(`Retornando ${topChunks.length} chunks. Maior similaridade: ${maiorSimilaridade}`);
+  return { contextos: contextos, maiorSimilaridade: maiorSimilaridade };
+}
+
+function responderPergunta(pergunta, historico, modo) {
+
+  const MAX_PERGUNTA_LENGTH = 1000;
+
+  if (!pergunta || typeof pergunta !== 'string' || pergunta.trim().length === 0) {
+    return "❌ Pergunta inválida ou vazia.";
+  }
+
+  if (pergunta.length > MAX_PERGUNTA_LENGTH) {
+    return `❌ Pergunta muito longa. Por favor, limite sua pergunta a ${MAX_PERGUNTA_LENGTH} caracteres.`;
+  }
+
+  pergunta = pergunta.trim();
+
+  // Modo de operação: Informar (padrão) ou Ensinar
+  if (modo === 'Ensinar') {
+    Logger.log("🧠 Modo 'Ensinar' ativado por usuário.");
+  } else {
+    Logger.log("🧠 Modo 'Informar' (padrão) ativado.");
+  }
+
+  historico = historico || [];
+
+  try {
+    // 1. LÓGICA DE BUSCA DE CONTEXTO (RAG)
+    Logger.log(`Iniciando busca de contexto para: "${pergunta}"`);
+    
+    const resultadoBusca = encontrarContextoRelevante(pergunta); 
+    const contextos = resultadoBusca.contextos; 
+    const similaridade = resultadoBusca.maiorSimilaridade; 
+    const contexto = contextos.join("\n\n---\n\n"); 
+    
+    // 2. Tratamento de erro do RAG
+    if (contextos.length === 1 && contextos[0].includes("Erro")) {
+      Logger.log(`Erro retornado pelo RAG: ${contextos[0]}`);
+      return contextos[0]; 
+    }
+
+    const SIMILARITY_THRESHOLD = 0.3;
+
+    // --- PROMPT da i.a 
+    const promptInformar = {
+      parts: [{ text: `
+        Você é um assistente virtual amigável e prestativo, especialista nos procedimentos do DRA. Sua tarefa é analisar a PERGUNTA do usuário, o HISTÓRICO da conversa e os dados de CONTEXTO e SIMILARIDADE para formular a melhor resposta. O HISTÓRICO é crucial. Se a pergunta for curta (ex: "e sobre X?", "por que?"), ela provavelmente se refere à sua resposta anterior. O CONTEXTO pode conter vários trechos do documento, separados por "---". Encontre a resposta relevante dentro deles.
+
+        REGRAS DE FORMATAÇÃO: Sempre formate suas respostas usando Markdown simples para facilitar a leitura. Use negrito para destacar termos importantes e listas com hífens (-) ou números (1., 2.) para passos ou itens. Não use cabeçalhos (#).
+
+        NOVA REGRA: TOM DE VOZ E ENCERRAMENTO:
+        Seja sempre amigável, prestativo e direto ao ponto.
+        Após dar a resposta (Regra 1) ou se não encontrar (Regra 2), sempre termine com uma pergunta amigável, como "Posso ajudar em algo mais?" ou "Isso esclarece sua dúvida?".
+
+        REGRAS DE COMPORTAMENTO:
+
+        PERGUNTA SOBRE O DRA (COM BOM CONTEXTO):
+        Se a PERGUNTA for sobre os procedimentos do DRA e a SIMILARIDADE for ALTA (acima de ${SIMILARITY_THRESHOLD}), use o CONTEXTO fornecido para responder.
+        Refine a Apresentação: Mesmo que o contexto seja um bloco de texto, use as regras de formatação (listas, negrito) para organizar a informação e torná-la fácil de ler.
+        Seja Fiel ao Contexto: Seja direto e claro. Não adicione informações que não estejam no contexto nem tente "ensinar" o porquê (esse é o trabalho do modo "Ensinar").
+
+        PERGUNTA SOBRE O DRA (COM CONTEXTO RUIM):
+        Se a PERGUNTA parece ser sobre o DRA, mas a SIMILARIDADE for BAIXA (abaixo de ${SIMILARITY_THRESHOLD}) ou o CONTEXTO não contiver a resposta, responda educadamente: "Hum, não consegui encontrar essa informação exata nos meus documentos."
+        Dê a Próxima Etapa: Em seguida, ajude o usuário sugerindo o modo "Ensinar". Diga: "Dica: Se você for um colaborador e achar que esta é uma informação que eu deveria saber, por favor, mude o seletor para o modo 'Ensinar' e envie a pergunta. Isso notificará um especialista para me treinar!"
+
+        PERGUNTAS "META" (SOBRE VOCÊ):
+        Se a PERGUNTA for sobre você, suas capacidades, ou saudações, responda de forma amigável e natural.
+        Explique que você é um assistente focado em ajudar com as dúvidas sobre os procedimentos do DRA.
+        (Ex: "Olá! Eu sou um assistente virtual e estou aqui para ajudar com perguntas sobre o DRA.")
+
+        PERGUNTAS FORA DE TÓPICO (NÃO RELACIONADAS):
+        Se a PERGUNTA NÃO tiver relação com o DRA, recuse educadamente.
+        Diga algo como: "Desculpe, mas só posso responder perguntas relacionadas aos procedimentos do DRA."
+      `}]
+    };
+
+    // --- PROMPT ENSINAR 
+    const promptEnsinar = {
+      parts: [{ text: `
+        Você é um Mentor Sênior especialista nos procedimentos do DRA. Sua principal função é ENSINAR o colaborador. Sua tarefa é analisar a PERGUNTA, o HISTÓRICO e os dados de CONTEXTO para formular uma resposta didática, como um professor. O HISTÓRICO é crucial. Se a pergunta for curta (ex: "e sobre X?"), ela provavelmente se refere à sua resposta anterior. O CONTEXTO pode conter vários trechos do documento, separados por "---".
+
+        REGRAS DE FORMATAÇÃO (Didática): Sempre formate suas respostas usando Markdown simples. Use negrito para destacar conceitos-chave. Use listas com números (1., 2.) para explicar passos (o "como chegar lá"). Use listas com hífens (-) para destacar pontos de atenção (o "o que cuidar", armadilhas, exceções).
+
+        REGRAS DE COMPORTAMENTO (ENSINAR):
+
+        CASO ESPECIAL (MODELOS DE RESPOSTA):
+        Se o CONTEXTO contiver claramente um modelo de resposta ou comunicado padrão (ex: "Prezado(a) Aluno(a), Documento anexado..."), sua tarefa principal é dupla:
+        1. Forneça o Modelo: Apresente o modelo de resposta exato para o colaborador, usando aspas ou um bloco de citação, para que ele aprenda o texto correto.
+        2. Ensine o "Porquê": Explique o motivo por trás dessa resposta. (Ex: "Quando o aluno solicitar X, este é o comunicado padrão que utilizamos.")
+        3. Refine a Explicação: O CONTEXTO foi escrito por um colaborador. Se a explicação dele sobre "quando usar" parecer confusa, não copie literalmente. Sua função de Mentor é refinar e simplificar a explicação, tornando-a mais clara.
+        4. Destaque "O que Cuidar": Use hífens (-) para explicar os pré-requisitos ou verificações necessárias antes de usar essa resposta. (Ex: "- Lembre-se de usar essa resposta apenas após a aprovação do preview, como o texto menciona.")
+
+        PERGUNTA SOBRE O DRA (COM BOM CONTEXTO GERAL):
+        (Se não for um modelo de resposta padrão)
+        Refine a Explicação: O CONTEXTO foi escrito por um colaborador. Se a linguagem dele parecer confusa, difícil ou muito técnica, não copie literalmente. Sua função de Mentor é refinar, simplificar e organizar essa informação para que o aprendizado seja fácil.
+        Explique o "Porquê": Tente explicar o motivo por trás do procedimento (se estiver implícito no contexto).
+        Destaque Passos: Se a pergunta for sobre um processo ("como fazer X"), detalhe os passos claramente (o "como chegar lá").
+        Destaque "O que Cuidar": Aponte armadilhas comuns, exceções ou detalhes importantes mencionados no CONTEXTO (o "o que cuidar").
+        Seja encorajador e claro.
+
+        PERGUNTA SOBRE O DRA (COM CONTEXTO RUIM):
+        Se a SIMILARIDADE for BAIXA (abaixo de ${SIMILARITY_THRESHOLD}) ou o CONTEXTO não contiver a resposta, responda educadamente: "Não encontrei essa informação no documento para poder ensiná-lo em detalhes."
+
+        PERGUNTAS "META" (SOBRE VOCÊ):
+        Responda de forma amigável. Explique que você é um assistente focado em ensinar os procedimentos do DRA.
+        (Ex: "Olá! Eu sou um assistente de ensino e estou aqui para ajudar você a entender a fundo os processos do DRA.")
+
+        PERGUNTAS FORA DE TÓPICO (NÃO RELACIONADAS):
+        Recuse educadamente.
+        Diga algo como: "Meu foco é ensinar sobre os procedimentos do DRA. Não consigo ajudar com esse tópico."
+      `}]
+    };
+
+    // 3. Lógica para escolher o prompt certo
+    let systemInstruction;
+    if (modo === 'Ensinar') {
+      systemInstruction = promptEnsinar;
+    } else {
+      systemInstruction = promptInformar;
+    }
+
+    const promptParaUsuario = `
+      ---
+      DADOS PARA ANÁLISE (RAG):
+      SIMILARIDADE (Do chunk Top-1): ${similaridade.toFixed(4)}
+      (Limite de confiança: ${SIMILARITY_THRESHOLD})
+      CONTEXTO (Top-${contextos.length} chunks encontrados):
+      ${contexto || "Nenhum contexto encontrado."}
+      ---
+      PERGUNTA:
+      ${pergunta}
+    `;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/${GENERATIVE_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+    
+    const contentsPayload = [
+      ...historico, 
+      { 
+        role: "user", 
+        parts: [{ text: promptParaUsuario }] 
+      }
+    ];
+
+    const payload = {
+      contents: contentsPayload,
+      systemInstruction: systemInstruction 
+    };
+    const options = {
+      method: 'POST',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true 
+    };
+    
+    const data = fetchWithRetry(url, options);
+
+    if (typeof data !== 'object' || data === null) {
+      Logger.log(`❌ Erro inesperado de fetchWithRetry. Retornou: ${data}`);
+      return `Erro no servidor: ${data}`;
+    }
+
+    if (data.error) {
+        Logger.log(`❌ Erro da API Gemini (JSON): ${data.error.message}`);
+        return `Erro ao chamar a API (JSON): ${data.error.message}`;
+    }
+    
+    const resposta = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    // --- SEGURANÇA (SAFETY FILTER) ---
+    if (!resposta) {
+      const finishReason = data?.candidates?.[0]?.finishReason;
+      Logger.log(`⚠️ A resposta está vazia. FinishReason: ${finishReason}`);
+      
+      if (finishReason === "SAFETY") {
+        return "❌ A sua solicitação foi bloqueada por motivos de segurança. Por favor, reformule sua pergunta.";
+      }
+      if (finishReason) {
+          return `❌ A resposta foi bloqueada pela API. Motivo: ${finishReason}`;
+      }
+    }
+
+    // --- REGISTRO DE RESPOSTAS FALHAS ---
+    if (resposta) {
+      const respostaLower = resposta.toLowerCase();
+      
+      const isFailure = respostaLower.includes("não encontrei") || 
+                        respostaLower.includes("não está detalhado") ||
+                        respostaLower.includes("não consta no") ||
+                        respostaLower.includes("não localizei");
+
+      const isRefusal = respostaLower.includes("só posso responder") ||
+                        respostaLower.includes("fui treinado apenas");
+
+      if (isFailure && !isRefusal) {
+        Logger.log("Registrando pergunta (IA não encontrou no RAG - Genérico)...");
+        registrarPerguntaSemResposta(pergunta, historico, resposta);
+      }
+    }
+
+    return resposta || "Não foi possível gerar uma resposta.";
+
+  } catch (e) {
+    // --- TRATAMENTO DE ERROS ---
+    Logger.log('❌ Erro capturado em responderPergunta: ' + e);
+    const msgErro = (e.message || e.toString()).toLowerCase();
+
+    if (msgErro.includes("429") || msgErro.includes("quota") || msgErro.includes("resource_exhausted")) {
+      return "😅 Ufa, trabalhei bastante agora! Atingi meu limite de velocidade. Por favor, aguarde uns 2 minutinhos e tente perguntar novamente.";
+    }
+
+    if (msgErro.includes("503") || msgErro.includes("overloaded") || msgErro.includes("temporarily overloaded")) {
+      return "🚦 Meus servidores estão congestionados no momento. Tente enviar sua pergunta de novo em 1 minuto, por favor.";
+    }
+
+    if (msgErro.includes("safety") || msgErro.includes("blocked") || msgErro.includes("harmful")) {
+      return "🛡️ Por motivos de segurança e diretrizes de conteúdo, não posso gerar uma resposta para essa solicitação específica.";
+    }
+
+    if (msgErro.includes("key") || msgErro.includes("403") || msgErro.includes("api key") || msgErro.includes("invalid argument")) {
+      return "🔑 Parece haver um problema técnico com minha chave de acesso. Por favor, avise ao colaborador responsável.";
+    }
+
+    return "😔 Ocorreu um problema técnico inesperado. Por favor, informe ao colaborador responsável.";
+  }
+}
+
+/***************************************************
+ * FUNÇÃO DE DIAGNÓSTICO: LISTAR MODELOS
+ ***************************************************/
+// função usada para encontrar possíveis modelos 
+function listarModelosDisponiveis() {
+  if (!GEMINI_API_KEY) {
+    Logger.log('❌ Chave de API não encontrada nas Propriedades do Script.');
+    return;
+  }
+  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}`;
+  const options = {
+    method: 'GET',
+    muteHttpExceptions: true
+  };
+  try {
+    const response = UrlFetchApp.fetch(url, options);
+    const rawResponse = response.getContentText();
+    const data = JSON.parse(rawResponse);
+    if (data.error) {
+      Logger.log(`❌ Erro ao listar modelos: ${data.error.message}`);
+      return;
+    }
+    Logger.log('✅ Modelos disponíveis para sua chave:');
+    const formattedModels = data.models.map(model => ({
+      nome: model.name,
+      metodosSuportados: model.supportedGenerationMethods
+    }));
+    Logger.log(JSON.stringify(formattedModels, null, 2));
+  } catch (e) {
+    Logger.log(`🚨 Erro crítico na execução: ${e.message}`);
+  }
+}
+
+// Função unificada para testar o "Cérebro" do Chat
+function executarTestesDeSistema() {
+  Logger.log("========= 🚀 INICIANDO SUÍTE DE TESTES =========");
+  
+  const perguntaTeste = "Qual o procedimento para abrir um chamado?";
+  Logger.log(`📌 Pergunta de Teste: "${perguntaTeste}"`);
+
+  // --- TESTE 1: O RAG (Busca de Contexto) ---
+  Logger.log("\n--- TESTE 1: Recuperação de Contexto (Embeddings) ---");
+  try {
+    const resultadoBusca = encontrarContextoRelevante(perguntaTeste);
+    Logger.log(`✅ Chunks retornados: ${resultadoBusca.contextos.length}`);
+    Logger.log(`✅ Maior Similaridade: ${resultadoBusca.maiorSimilaridade.toFixed(4)}`);
+    if (resultadoBusca.contextos.length > 0) {
+      Logger.log(`Trecho mais relevante encontrado:\n"${resultadoBusca.contextos[0].substring(0, 150)}..."`);
+    } else {
+      Logger.log("⚠️ AVISO: Nenhum contexto foi achado. O documento não tem essa informação ou o limite de similaridade está muito alto.");
+    }
+  } catch (e) {
+    Logger.log(`❌ Falha no Teste 1: ${e}`);
+  }
+
+  // --- TESTE 2: Geração de Resposta (Modo Informar) ---
+  Logger.log("\n--- TESTE 2: Geração de Resposta (Modo Informar) ---");
+  try {
+    const respostaInformar = responderPergunta(perguntaTeste, [], 'Informar');
+    Logger.log(`✅ Resposta do Assistente:\n${respostaInformar}`);
+  } catch (e) {
+    Logger.log(`❌ Falha no Teste 2: ${e}`);
+  }
+
+  // --- TESTE 3: Geração de Resposta (Modo Ensinar) ---
+  Logger.log("\n--- TESTE 3: Geração de Resposta (Modo Ensinar) ---");
+  try {
+    const respostaEnsinar = responderPergunta(perguntaTeste, [], 'Ensinar');
+    Logger.log(`✅ Resposta do Mentor:\n${respostaEnsinar}`);
+  } catch (e) {
+    Logger.log(`❌ Falha no Teste 3: ${e}`);
+  }
+
+  Logger.log("\n========= 🏁 TESTES CONCLUÍDOS =========");
+}
+
+/***************************************************
+ * FUNÇÃO DE ENTRADA DO APLICATIVO WEB 
+ ***************************************************/
+function doGet(e) {
+  Logger.log("=========================================");
+  Logger.log("🚀 doGet: Iniciando carregamento do Aplicativo Web.");
+  
+  const template = HtmlService.createTemplateFromFile('index');
+
+  // Autenticação gerenciada pelo Google Script (baseada no e-mail do usuário)
+  template.isAdmin = true;
+
+  // --- CARREGAMENTO DE IMAGENS ---
+  Logger.log(`Buscando ${LOGO_FILE_NAME}...`);
+  template.logoData = getImageData(LOGO_FILE_NAME); 
+  
+  Logger.log(`Buscando ${BACKGROUND_FILE_NAME}...`);
+  template.bgData = getImageData(BACKGROUND_FILE_NAME); 
+  
+  Logger.log(`Buscando ${AVATAR_AI_FILE_NAME}...`);
+  template.avatarAiData = getImageData(AVATAR_AI_FILE_NAME); 
+
+  Logger.log("✅ doGet: Dados injetados. Gerando HTML...");
+  
+  const htmlOutput = template.evaluate()
+      .setTitle('Assistente DRA - UNISUAM')
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+
+  Logger.log("=========================================");
+  return htmlOutput;
+}
+
+/**
+ * Execute esta função MANUALMENTE no editor sempre que alterar o Google Doc de conhecimento no Drive.
+ * Ela limpa todos os caches, lê o conteúdo do Google Doc usando DocumentApp e regenera os embeddings,
+ * mantendo o chat sempre atualizado e rápido para os usuários.
+ */
+function forcarAtualizacaoBaseDeConhecimento() {
+  Logger.log("🔄 Iniciando atualização forçada dos embeddings...");
+
+  const cache = CacheService.getScriptCache();
+  const folder = getKnowledgeFolder();
+  if (!folder) return Logger.log("❌ Pasta não encontrada.");
+
+  const files = folder.getFilesByName(KNOWLEDGE_FILE_NAME);
+  if (!files.hasNext()) return Logger.log(`❌ Arquivo de conhecimento não encontrado: ${KNOWLEDGE_FILE_NAME}`);
+
+  const file = files.next();
+
+  // Lê o conteúdo usando DocumentApp (compatível com Google Docs)
+  let fileContent;
+  try {
+    const doc = DocumentApp.openById(file.getId());
+    fileContent = doc.getBody().getText();
+  } catch (e) {
+    Logger.log(`❌ Erro ao abrir o Google Doc "${KNOWLEDGE_FILE_NAME}": ${e}`);
+    Logger.log("💡 Verifique se o arquivo é um Google Doc (não .txt ou .docx) e se o script tem permissão de acesso (DocumentApp).");
+    return;
+  }
+
+  if (!fileContent || fileContent.trim().length === 0) {
+    Logger.log("❌ O documento de conhecimento está vazio ou não pôde ser lido.");
+    return;
+  }
+
+  const timestamp = file.getLastUpdated().toISOString();
+
+  // Invalida todos os caches para garantir regeneração completa dos embeddings
+  cache.remove(CACHE_EMB_META);
+  cache.remove(CACHE_EMB_FILE_ID);
+  cache.remove(CACHE_KB_TIMESTAMP);
+  cache.remove(CACHE_KB_TEXT);
+  Logger.log("🗑️ Caches de embeddings e base de conhecimento limpos.");
+
+  // Remove o arquivo JSON de embeddings antigo do Drive, se existir
+  const embFiles = folder.getFilesByName(EMBEDDINGS_FILE_NAME);
+  if (embFiles.hasNext()) {
+    embFiles.next().setTrashed(true);
+    Logger.log(`🗑️ Arquivo de embeddings antigo (${EMBEDDINGS_FILE_NAME}) removido.`);
+  }
+
+  // Regenera os embeddings com o conteúdo atualizado do Google Doc
+  Logger.log(`📄 Texto extraído (${fileContent.length} caracteres). Iniciando geração de embeddings...`);
+  recuperarOuGerarEmbeddings(folder, fileContent, timestamp);
+
+  Logger.log("✅ Atualização concluída com sucesso! O chat está pronto e atualizado para os usuários.");
+}

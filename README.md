@@ -46,8 +46,8 @@ Usuário (Browser)
 
 **Tecnologias utilizadas:**
 - **Google Apps Script** — hospedagem, back-end e integração com o ecossistema Google
-- **Google Drive** — armazenamento do arquivo de conhecimento (`conhecimento.txt`), embeddings em cache (`embeddings_db.json`), imagens e relatórios
-- **Gemini AI** — modelo generativo (`gemini-flash-latest`) e modelo de embeddings (`text-embedding-004`)
+- **Google Drive** — armazenamento do arquivo de conhecimento (`conhecimento` — Google Doc), embeddings em cache (`embeddings_v2.json`), imagens e relatórios
+- **Gemini AI** — modelo generativo (`gemini-2.5-flash`) e modelo de embeddings (`gemini-embedding-001`)
 - **marked.js** — renderização de Markdown no front-end
 
 ---
@@ -73,12 +73,12 @@ Dentro dela, adicione os seguintes arquivos:
 
 | Arquivo | Obrigatório | Descrição |
 |---|---|---|
-| `conhecimento.txt` | ✅ Sim | Base de conhecimento em texto puro. Escreva os procedimentos, respostas e informações que a IA deve saber. |
+| `conhecimento` (Google Doc) | ✅ Sim | Base de conhecimento em formato Google Doc. Escreva os procedimentos, respostas e informações que a IA deve saber. O sistema usa `DocumentApp` para extrair o texto. |
 | `logo.png` | ❌ Opcional | Logotipo exibido no cabeçalho do chat |
 | `background.png` | ❌ Opcional | Imagem de fundo da interface |
 | `i.a.png` | ❌ Opcional | Avatar exibido nas mensagens da IA |
 
-> **Dica para o `conhecimento.txt`:** Organize o conteúdo em parágrafos separados por linhas em branco. Cada parágrafo vira um "chunk" de conhecimento pesquisável. Quanto mais claro e bem estruturado, melhores serão as respostas.
+> **Dica para o arquivo `conhecimento`:** Organize o conteúdo em parágrafos separados por linhas em branco. Cada parágrafo vira um "chunk" de conhecimento pesquisável. Quanto mais claro e bem estruturado, melhores serão as respostas.
 
 ---
 
@@ -124,10 +124,10 @@ Dentro dela, adicione os seguintes arquivos:
 
 Na primeira vez que a IA receber uma pergunta, ela irá:
 
-1. Ler o arquivo `conhecimento.txt` do Drive.
+1. Ler o Google Doc `conhecimento` do Drive usando `DocumentApp`.
 2. Dividir o texto em pedaços (*chunks*) de até 1.500 caracteres.
 3. Gerar um vetor de embedding para cada chunk via Gemini API.
-4. Salvar tudo em `embeddings_db.json` no Drive para uso futuro.
+4. Salvar tudo em `embeddings_v2.json` no Drive para uso futuro.
 
 > ⏳ Esse processo pode levar **1-2 minutos** na primeira vez, dependendo do tamanho do documento. Nas consultas seguintes, os embeddings são carregados diretamente do CacheService (memória compartilhada) — sem nenhuma leitura de Drive.
 
@@ -135,7 +135,9 @@ Na primeira vez que a IA receber uma pergunta, ela irá:
 
 ### 6. Atualizar a Base de Conhecimento
 
-Edite e salve o arquivo `conhecimento.txt` no Drive. O sistema detecta automaticamente que o arquivo mudou (comparando o timestamp) e regenera os embeddings na próxima consulta.
+Edite e salve o Google Doc `conhecimento` no Drive. O sistema detecta automaticamente que o arquivo mudou (comparando o timestamp) e regenera os embeddings na próxima consulta.
+
+Para forçar a regeneração imediata dos embeddings (recomendado após editar o documento), execute manualmente a função `forcarAtualizacaoBaseDeConhecimento` no editor do Apps Script: abra o projeto em [script.google.com](https://script.google.com), selecione a função `forcarAtualizacaoBaseDeConhecimento` no menu suspenso de funções (próximo ao botão ▶ Executar) e clique em **Executar**. Ela limpará todos os caches, lerá o conteúdo atualizado do Google Doc e regenerará os embeddings.
 
 ---
 
@@ -147,7 +149,7 @@ Em cada requisição, o pipeline carrega os embeddings pela ordem de velocidade:
 |---|---|---|---|
 | 1 | **CacheService** (memória compartilhada) | < 100ms | 99% das requisições |
 | 2 | **Google Drive** (arquivo JSON) | 500ms – 2s | Após reinício do script ou expiração do cache (6h) |
-| 3 | **Gemini API** (geração) | 1-5 min | Apenas quando `conhecimento.txt` é modificado |
+| 3 | **Gemini API** (geração) | 1-5 min | Apenas quando o Google Doc `conhecimento` é modificado |
 
 Os IDs de pasta e arquivo também são armazenados em cache, evitando buscas lentas por nome (`getFoldersByName` / `getFilesByName`) após a primeira requisição.
 
@@ -159,11 +161,11 @@ As principais configurações ficam no início do arquivo `Code.gs`:
 
 ```javascript
 const GEMINI_API_KEY = props.getProperty('GEMINI_API_KEY'); // Chave via Propriedades do Script
-const EMBEDDING_MODEL = 'models/text-embedding-004';        // Modelo de embeddings
-const GENERATIVE_MODEL = 'models/gemini-flash-latest';      // Modelo generativo
+const EMBEDDING_MODEL = 'models/gemini-embedding-001';      // Modelo de embeddings
+const GENERATIVE_MODEL = 'models/gemini-2.5-flash';         // Modelo generativo
 
 const DRIVE_FOLDER_NAME = "I.A conhecimento";  // Nome da pasta no Drive
-const KNOWLEDGE_FILE_NAME = "conhecimento.txt"; // Arquivo de conhecimento
+const KNOWLEDGE_FILE_NAME = "conhecimento";    // Nome do Google Doc de conhecimento (sem extensão)
 ```
 
 ### Parâmetros de Busca (`encontrarContextoRelevante`)
