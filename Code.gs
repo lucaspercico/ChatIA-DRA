@@ -15,17 +15,20 @@ const GEMINI_API_KEY = props.getProperty('GEMINI_API_KEY');
 
 const EMBEDDING_MODEL = 'models/gemini-embedding-001';
 
+
 const GENERATIVE_MODEL = 'models/gemini-2.5-flash'; 
 
 // --- CONFIGURAÇÕES DE ARQUIVOS DO DRIVE ---
 const DRIVE_FOLDER_NAME = "I.A conhecimento";
-const KNOWLEDGE_FILE_NAME = "conhecimento";
+const KNOWLEDGE_FILE_NAME = "conhecimento.txt";
 const LOGO_FILE_NAME = "logo.png"; 
+
+
 const BACKGROUND_FILE_NAME = "background.png"; 
 const AVATAR_AI_FILE_NAME = "i.a.png"; 
 
 // Persiste os vetores de embedding no Drive para não regenerá-los a cada deploy
-const EMBEDDINGS_FILE_NAME = "embeddings_v2.json";
+const EMBEDDINGS_FILE_NAME = "embeddings_db.json";
 
 // --- CONFIGURAÇÃO DO GOOGLE SHEETS PARA LOGS ---
 // Crie uma Planilha com duas abas: "Perguntas_Falhas" e "Feedbacks"
@@ -50,7 +53,7 @@ const EMB_CHUNKS_PER_PAGE = 9; // 5 × 11 KB ≈ 55 KB — margem segura
  *  FUNÇÕES AUXILIARES
  ***************************************************/
 
-function chunkText(text, maxLength = 3000, overlap = 200) {
+function chunkText(text, maxLength = 1500, overlap = 150) {
   if (!text) return [];
   const chunks = [];
   let startIndex = 0;
@@ -67,11 +70,12 @@ function chunkText(text, maxLength = 3000, overlap = 200) {
         breakPoint = text.lastIndexOf('. ', endIndex);
       }
 
-      // Se não achar ponto final, quebra no último espaço vazio
+      // Se não achar ponto final, quebra no último espaço vazio (não corta palavras ao meio)
       if (breakPoint <= startIndex) {
         breakPoint = text.lastIndexOf(' ', endIndex);
       }
 
+      // Se achou um ponto de quebra válido, ajusta o endIndex
       if (breakPoint > startIndex) {
         endIndex = breakPoint + 1;
       }
@@ -80,10 +84,13 @@ function chunkText(text, maxLength = 3000, overlap = 200) {
     const chunk = text.slice(startIndex, endIndex).trim();
     if (chunk) chunks.push(chunk);
 
+    // O pulo do gato: Avança o índice, mas volta um pouco (overlap) para não perder o contexto
     startIndex = endIndex - overlap;
 
+    // Trava de segurança: se o texto terminou nesse chunk, encerra o loop
     if (endIndex >= text.length) break;
 
+    // Trava de segurança para evitar loop infinito (caso overlap >= maxLength)
     if (startIndex <= endIndex - maxLength) {
       startIndex = endIndex;
     }
@@ -158,34 +165,23 @@ function fetchWithRetry(url, options, maxRetries = 3) {
  ***************************************************/
 
 function generateEmbedding(text) {
-  if (!text || !GEMINI_API_KEY) {
-    Logger.log("❌ Erro: Texto vazio ou GEMINI_API_KEY não configurada nas Propriedades do Script.");
-    return [];
-  }
-
-
   const url = `https://generativelanguage.googleapis.com/v1beta/${EMBEDDING_MODEL}:embedContent?key=${GEMINI_API_KEY}`;
-  
   const options = {
     method: "POST",
     contentType: "application/json",
     payload: JSON.stringify({ content: { parts: [{ text: text }] } }),
     muteHttpExceptions: true
   };
-
   try {
-    const response = UrlFetchApp.fetch(url, options);
-    const data = JSON.parse(response.getContentText());
-
+    const data = fetchWithRetry(url, options);
     if (data.error) {
-      Logger.log(`❌ Erro na API (Bloco de texto): ${data.error.message}`);
-      return [];
+      Logger.log(`❌ Erro na API Embedding: ${data.error.message}`);
+      throw new Error(data.error.message);
     }
-    
     return data?.embedding?.values || [];
   } catch (e) {
-    Logger.log("❌ Falha na chamada de embedding: " + e);
-    return [];
+    Logger.log("❌ Erro ao gerar embedding (após retentativas): " + e);
+    throw e;
   }
 }
 
@@ -255,17 +251,16 @@ function getKnowledgeBaseAndTimestamp() {
   const folder = getKnowledgeFolder();
   if (!folder) return { text: null, timestamp: null };
 
+  // Tenta obter o arquivo diretamente pelo ID em cache (evita getFilesByName a cada chamada)
   let file = null;
   const cachedFileId = cache.get(CACHE_KB_FILE_ID);
-  
   if (cachedFileId) {
     try {
       file = DriveApp.getFileById(cachedFileId);
     } catch (e) {
-      cache.remove(CACHE_KB_FILE_ID);
+      cache.remove(CACHE_KB_FILE_ID); // ID inválido
     }
   }
-
   if (!file) {
     const files = folder.getFilesByName(KNOWLEDGE_FILE_NAME);
     if (!files.hasNext()) {
@@ -280,13 +275,8 @@ function getKnowledgeBaseAndTimestamp() {
   const cachedTimestamp = cache.get(CACHE_KB_TIMESTAMP);
 
   if (fileLastUpdated !== cachedTimestamp) {
-    Logger.log("🔄 Google Doc alterado. Extraindo novo texto e atualizando o cache...");
-    
-    
-    const doc = DocumentApp.openById(file.getId());
-    const fileContent = doc.getBody().getText(); 
-    // ---------------------------
-
+    Logger.log("🔄 Base de conhecimento alterada. Recarregando do Drive e atualizando o cache...");
+    const fileContent = file.getBlob().getDataAsString('UTF-8');
     cache.put(CACHE_KB_TEXT, fileContent, CACHE_TTL);
     cache.put(CACHE_KB_TIMESTAMP, fileLastUpdated, CACHE_TTL);
     return { text: fileContent, timestamp: fileLastUpdated };
@@ -420,28 +410,23 @@ function salvarEmbeddingsNoCache(fileTimestamp, chunks) {
  *   2. Arquivo JSON no Drive   (lento, mas persiste entre instâncias)
  *   3. Geração via Gemini API  (só acontece quando o conhecimento muda)
  */
-/**
- * Retorna os chunks com embeddings usando a seguinte hierarquia:
- * 1. CacheService | 2. Arquivo JSON no Drive | 3. Geração via Gemini API
- */
 function recuperarOuGerarEmbeddings(folder, fullText, fileTimestamp) {
   const cache = CacheService.getScriptCache();
 
-  // 1. Verifica o CacheService
+  // 1. Verifica o CacheService primeiro (evita leitura do Drive na maioria das requisições)
   const cachedChunks = carregarEmbeddingsDoCache(fileTimestamp);
   if (cachedChunks) return cachedChunks;
 
-  // 2. Tenta localizar o arquivo JSON no Drive
+  // 2. Tenta localizar o arquivo JSON de embeddings no Drive via ID em cache
   let existingFile = null;
   const cachedFileId = cache.get(CACHE_EMB_FILE_ID);
   if (cachedFileId) {
-    try { 
-      existingFile = DriveApp.getFileById(cachedFileId); 
-    } catch (e) { 
-      cache.remove(CACHE_EMB_FILE_ID); 
+    try {
+      existingFile = DriveApp.getFileById(cachedFileId);
+    } catch (e) {
+      cache.remove(CACHE_EMB_FILE_ID);
     }
   }
-  
   if (!existingFile) {
     const files = folder.getFilesByName(EMBEDDINGS_FILE_NAME);
     if (files.hasNext()) {
@@ -452,70 +437,44 @@ function recuperarOuGerarEmbeddings(folder, fullText, fileTimestamp) {
 
   if (existingFile) {
     try {
-      const data = JSON.parse(existingFile.getBlob().getDataAsString('UTF-8'));
+      const data = JSON.parse(existingFile.getBlob().getDataAsString());
       if (data.timestamp === fileTimestamp && data.chunks && data.chunks.length > 0) {
-        Logger.log(`✅ ${data.chunks.length} embeddings carregados do Drive.`);
+        Logger.log(`✅ ${data.chunks.length} embeddings carregados do Drive. Salvando no cache...`);
         salvarEmbeddingsNoCache(fileTimestamp, data.chunks);
         return data.chunks;
       }
-      Logger.log("🔄 Documento desatualizado. Removendo JSON antigo...");
+      Logger.log("🔄 Embeddings desatualizados. Regenerando...");
       existingFile.setTrashed(true);
       cache.remove(CACHE_EMB_FILE_ID);
     } catch (e) {
-      Logger.log(`⚠️ Erro ao ler JSON: ${e}`);
-    }
-  }
-
-  // 3. Geração de Novos Embeddings (Versão Estável com Logs)
-  const chunks = chunkText(fullText);
-  const baseDeDados = [];
-  
-  Logger.log(`🔨 Iniciando geração para ${chunks.length} blocos...`);
-
-  for (let i = 0; i < chunks.length; i++) {
-    // Log de progresso ANTES da chamada para você saber o que está sendo processado
-    Logger.log(`⏳ Chamando API para Bloco ${i + 1} de ${chunks.length}...`);
-
-    if (i > 0) Utilities.sleep(800); // Pausa para evitar limite de quota
-    
-    try {
-      // Chamada da API isolada para não travar o loop em caso de erro único
-      const vetor = generateEmbedding(chunks[i]);
-      
-      if (vetor && vetor.length > 0) {
-        baseDeDados.push({ text: chunks[i], embedding: vetor });
-      } else {
-        Logger.log(`⚠️ Bloco ${i + 1} ignorado (vetor vazio).`);
-      }
-    } catch (e) {
-      Logger.log(`❌ Erro no bloco ${i + 1}: ${e}`);
-    }
-  }
-
-  // --- SALVAMENTO ROBUSTO ---
-  if (baseDeDados.length > 0) {
-    try {
-      Logger.log("💾 Gravando banco de dados de embeddings no Drive...");
-      const payload = { 
-        timestamp: fileTimestamp, 
-        chunks: baseDeDados,
-        info: "Gerado em " + new Date().toLocaleString()
-      };
-      
-      const jsonString = JSON.stringify(payload);
-      const newFile = folder.createFile(EMBEDDINGS_FILE_NAME, jsonString, MimeType.PLAIN_TEXT); 
-      
-      // Atualiza cache com o novo arquivo
-      cache.put(CACHE_EMB_FILE_ID, newFile.getId(), CACHE_TTL);
-      salvarEmbeddingsNoCache(fileTimestamp, baseDeDados);
-      
-      Logger.log(`✅ SUCESSO! Arquivo "${EMBEDDINGS_FILE_NAME}" criado.`);
-      return baseDeDados;
-    } catch (e) {
-      Logger.log(`❌ ERRO AO SALVAR NO DRIVE: ${e}`);
+      Logger.log(`⚠️ Erro ao ler JSON de embeddings (corrompido?). Regenerando... ${e}`);
     }
   } else {
-    Logger.log("❌ Falha crítica: Nenhum embedding foi gerado.");
+    Logger.log("🆕 Nenhum arquivo de embeddings encontrado. Gerando pela primeira vez...");
+  }
+
+  // 3. Gera novos embeddings (acontece apenas quando o documento de conhecimento muda)
+  const chunks = chunkText(fullText);
+  const baseDeDados = [];
+  Logger.log(`🔨 Gerando embeddings para ${chunks.length} chunks...`);
+
+  for (let i = 0; i < chunks.length; i++) {
+    if (i > 0) Utilities.sleep(500); // Pausa para respeitar o rate limit da API de Embeddings.
+    // Erros 429 são tratados automaticamente pelo fetchWithRetry com backoff exponencial.
+    const vetor = generateEmbedding(chunks[i]);
+    if (vetor && vetor.length > 0) {
+      baseDeDados.push({ text: chunks[i], embedding: vetor });
+    } else {
+      Logger.log(`⚠️ Falha ao gerar vetor para o chunk ${i}. Ignorando.`);
+    }
+  }
+
+  if (baseDeDados.length > 0) {
+    const payload = { timestamp: fileTimestamp, chunks: baseDeDados };
+    const newFile = folder.createFile(EMBEDDINGS_FILE_NAME, JSON.stringify(payload), "application/json");
+    cache.put(CACHE_EMB_FILE_ID, newFile.getId(), CACHE_TTL);
+    salvarEmbeddingsNoCache(fileTimestamp, baseDeDados);
+    Logger.log("💾 Novos embeddings salvos no Drive e no CacheService.");
   }
 
   return baseDeDados;
@@ -577,6 +536,7 @@ function encontrarContextoRelevante(pergunta) {
   return { contextos: contextos, maiorSimilaridade: maiorSimilaridade };
 }
 
+
 function responderPergunta(pergunta, historico, modo) {
 
   const MAX_PERGUNTA_LENGTH = 1000;
@@ -604,6 +564,7 @@ function responderPergunta(pergunta, historico, modo) {
     // 1. LÓGICA DE BUSCA DE CONTEXTO (RAG)
     Logger.log(`Iniciando busca de contexto para: "${pergunta}"`);
     
+    // Assume que a função encontrarContextoRelevante existe no seu código
     const resultadoBusca = encontrarContextoRelevante(pergunta); 
     const contextos = resultadoBusca.contextos; 
     const similaridade = resultadoBusca.maiorSimilaridade; 
@@ -728,6 +689,7 @@ function responderPergunta(pergunta, historico, modo) {
       muteHttpExceptions: true 
     };
     
+    // Assume que fetchWithRetry existe no seu código
     const data = fetchWithRetry(url, options);
 
     if (typeof data !== 'object' || data === null) {
@@ -756,22 +718,22 @@ function responderPergunta(pergunta, historico, modo) {
     }
 
     // --- REGISTRO DE RESPOSTAS FALHAS ---
-    if (resposta) {
-      const respostaLower = resposta.toLowerCase();
-      
-      const isFailure = respostaLower.includes("não encontrei") || 
-                        respostaLower.includes("não está detalhado") ||
-                        respostaLower.includes("não consta no") ||
-                        respostaLower.includes("não localizei");
-
-      const isRefusal = respostaLower.includes("só posso responder") ||
-                        respostaLower.includes("fui treinado apenas");
-
-      if (isFailure && !isRefusal) {
-        Logger.log("Registrando pergunta (IA não encontrou no RAG - Genérico)...");
-        registrarPerguntaSemResposta(pergunta, historico, resposta);
-      }
+      if (resposta) {
+    const respostaLower = resposta.toLowerCase();
+    
+    // Verifica se a resposta contém "não" + alguma indicação de busca frustrada
+    const termosFalha = ["encontrar", "encontrei", "localizei", "consta", "detalhado", "disponível"];
+    const temNegacao = respostaLower.includes("não") || respostaLower.includes("hum,");
+    
+    // Se tem negação e um dos termos de busca, ou se a similaridade foi muito baixa
+    const isFailure = temNegacao && termosFalha.some(termo => respostaLower.includes(termo));
+    
+    // O pulo do gato: Se a similaridade do RAG foi abaixo de 0.25, registramos de qualquer forma
+    if (isFailure || (resultadoBusca && resultadoBusca.maiorSimilaridade < 0.25)) {
+      Logger.log("🚨 Falha detectada ou similaridade baixa. Gravando no Sheets...");
+      registrarPerguntaSemResposta(pergunta, historico, resposta);
     }
+  } 
 
     return resposta || "Não foi possível gerar uma resposta.";
 
@@ -799,11 +761,10 @@ function responderPergunta(pergunta, historico, modo) {
     return "😔 Ocorreu um problema técnico inesperado. Por favor, informe ao colaborador responsável.";
   }
 }
-
 /***************************************************
  * FUNÇÃO DE DIAGNÓSTICO: LISTAR MODELOS
  ***************************************************/
-// função usada para encontrar possíveis modelos 
+ // função usada para enontrar possiveis modelos 
 function listarModelosDisponiveis() {
   if (!GEMINI_API_KEY) {
     Logger.log('❌ Chave de API não encontrada nas Propriedades do Script.');
@@ -832,15 +793,15 @@ function listarModelosDisponiveis() {
     Logger.log(`🚨 Erro crítico na execução: ${e.message}`);
   }
 }
-
 // Função unificada para testar o "Cérebro" do Chat
 function executarTestesDeSistema() {
   Logger.log("========= 🚀 INICIANDO SUÍTE DE TESTES =========");
   
-  const perguntaTeste = "Qual o procedimento para abrir um chamado?";
+  const perguntaTeste = "Qual o procedimento para abrir um chamado?"; // Mude para algo do seu PDF/TXT
   Logger.log(`📌 Pergunta de Teste: "${perguntaTeste}"`);
 
   // --- TESTE 1: O RAG (Busca de Contexto) ---
+  // É vital saber se os Embeddings estão achando o texto certo antes de culpar a IA.
   Logger.log("\n--- TESTE 1: Recuperação de Contexto (Embeddings) ---");
   try {
     const resultadoBusca = encontrarContextoRelevante(perguntaTeste);
@@ -875,15 +836,37 @@ function executarTestesDeSistema() {
 
   Logger.log("\n========= 🏁 TESTES CONCLUÍDOS =========");
 }
-
 /***************************************************
  * FUNÇÃO DE ENTRADA DO APLICATIVO WEB 
  ***************************************************/
+ /**
+ * Execute esta função MANUALMENTE no editor sempre que alterar o conhecimento.txt no Drive.
+ * Ela regenera os embeddings em background, mantendo o chat sempre rápido para os usuários.
+ */
+function forcarAtualizacaoBaseDeConhecimento() {
+  Logger.log("Iniciando atualização forçada dos embeddings...");
+
+  const folder = getKnowledgeFolder();
+  if (!folder) return Logger.log("Pasta não encontrada.");
+
+  const files = folder.getFilesByName(KNOWLEDGE_FILE_NAME);
+  if (!files.hasNext()) return Logger.log("Arquivo de conhecimento não encontrado.");
+
+  const file = files.next();
+  const fileContent = file.getBlob().getDataAsString('UTF-8');
+  const timestamp = file.getLastUpdated().toISOString();
+
+  // Como estamos rodando manualmente, não importa se demorar alguns minutos.
+  // A função recuperarOuGerarEmbeddings vai deletar o JSON velho e criar um novo.
+  recuperarOuGerarEmbeddings(folder, fileContent, timestamp);
+
+  Logger.log("✅ Atualização concluída com sucesso! O chat está pronto e rápido para os usuários.");
+}
 function doGet(e) {
   Logger.log("=========================================");
   Logger.log("🚀 doGet: Iniciando carregamento do Aplicativo Web.");
   
-  const template = HtmlService.createTemplateFromFile('index');
+  const template = HtmlService.createTemplateFromFile('index.html');
 
   // Autenticação gerenciada pelo Google Script (baseada no e-mail do usuário)
   template.isAdmin = true;
@@ -909,58 +892,24 @@ function doGet(e) {
   return htmlOutput;
 }
 
-/**
- * Execute esta função MANUALMENTE no editor sempre que alterar o Google Doc de conhecimento no Drive.
- * Ela limpa todos os caches, lê o conteúdo do Google Doc usando DocumentApp e regenera os embeddings,
- * mantendo o chat sempre atualizado e rápido para os usuários.
- */
-function forcarAtualizacaoBaseDeConhecimento() {
-  Logger.log("🔄 Iniciando atualização forçada dos embeddings...");
+/****** 
+ função para testar a planilha
+*/
 
-  const cache = CacheService.getScriptCache();
-  const folder = getKnowledgeFolder();
-  if (!folder) return Logger.log("❌ Pasta não encontrada.");
-
-  const files = folder.getFilesByName(KNOWLEDGE_FILE_NAME);
-  if (!files.hasNext()) return Logger.log(`❌ Arquivo de conhecimento não encontrado: ${KNOWLEDGE_FILE_NAME}`);
-
-  const file = files.next();
-
-  // Lê o conteúdo usando DocumentApp (compatível com Google Docs)
-  let fileContent;
+function testeConexaoPlanilha() {
+  const id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_LOG_ID');
+  console.log("ID recuperado:", id);
   try {
-    const doc = DocumentApp.openById(file.getId());
-    fileContent = doc.getBody().getText();
+    const ss = SpreadsheetApp.openById(id);
+    const sheet = ss.getSheetByName('Perguntas_Falhas');
+    if (sheet) {
+      sheet.appendRow([new Date(), "TESTE DE SISTEMA", "TESTE", "HISTORICO TESTE"]);
+      console.log("✅ SUCESSO! A linha de teste foi gravada na planilha.");
+    } else {
+      console.log("❌ ERRO: Aba 'Perguntas_Falhas' não encontrada.");
+    }
   } catch (e) {
-    Logger.log(`❌ Erro ao abrir o Google Doc "${KNOWLEDGE_FILE_NAME}": ${e}`);
-    Logger.log("💡 Verifique se o arquivo é um Google Doc (não .txt ou .docx) e se o script tem permissão de acesso (DocumentApp).");
-    return;
+    console.log("❌ ERRO CRÍTICO: " + e.message);
+    console.log("Verifique se o ID está correto e se o script tem permissão de editor na planilha.");
   }
-
-  if (!fileContent || fileContent.trim().length === 0) {
-    Logger.log("❌ O documento de conhecimento está vazio ou não pôde ser lido.");
-    return;
-  }
-
-  const timestamp = file.getLastUpdated().toISOString();
-
-  // Invalida todos os caches para garantir regeneração completa dos embeddings
-  cache.remove(CACHE_EMB_META);
-  cache.remove(CACHE_EMB_FILE_ID);
-  cache.remove(CACHE_KB_TIMESTAMP);
-  cache.remove(CACHE_KB_TEXT);
-  Logger.log("🗑️ Caches de embeddings e base de conhecimento limpos.");
-
-  // Remove o arquivo JSON de embeddings antigo do Drive, se existir
-  const embFiles = folder.getFilesByName(EMBEDDINGS_FILE_NAME);
-  if (embFiles.hasNext()) {
-    embFiles.next().setTrashed(true);
-    Logger.log(`🗑️ Arquivo de embeddings antigo (${EMBEDDINGS_FILE_NAME}) removido.`);
-  }
-
-  // Regenera os embeddings com o conteúdo atualizado do Google Doc
-  Logger.log(`📄 Texto extraído (${fileContent.length} caracteres). Iniciando geração de embeddings...`);
-  recuperarOuGerarEmbeddings(folder, fileContent, timestamp);
-
-  Logger.log("✅ Atualização concluída com sucesso! O chat está pronto e atualizado para os usuários.");
 }
