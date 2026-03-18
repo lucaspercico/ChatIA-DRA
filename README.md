@@ -13,7 +13,7 @@ Assistente de IA conversacional construído sobre **Google Apps Script** e **Gem
 | 🧠 Cache de Embeddings | Os vetores são guardados no Google Drive **e no CacheService** (memória compartilhada). Só são regenerados quando o documento de conhecimento muda |
 | 🎓 Dois modos de resposta | **Informar** (respostas diretas para alunos) e **Ensinar** (explicações didáticas para colaboradores) |
 | 👍👎 Feedback | Botões de like/dislike em cada resposta; feedbacks negativos são registrados automaticamente para revisão |
-| 📝 Relatório de lacunas | Perguntas não respondidas são salvas em arquivo `.txt` no Drive para alimentar a base de conhecimento futuramente |
+| 📝 Relatório de lacunas | Perguntas não respondidas são salvas em arquivo `Docs` no Drive para alimentar a base de conhecimento futuramente |
 | 🖼️ Personalização visual | Logo, imagem de fundo e avatar da IA são carregados dinamicamente do Google Drive |
 | 🔑 Autenticação via Google | O controle de acesso é gerenciado pelo próprio Google Script com base no e-mail do usuário — sem necessidade de implementar autenticação manual |
 | ♻️ Histórico de conversa | Mantém as últimas 10 trocas da sessão para respostas contextuais |
@@ -73,7 +73,7 @@ Dentro dela, adicione os seguintes arquivos:
 
 | Arquivo | Obrigatório | Descrição |
 |---|---|---|
-| `conhecimento` (Google Doc) | ✅ Sim | Base de conhecimento em formato Google Doc. Escreva os procedimentos, respostas e informações que a IA deve saber. O sistema usa `DocumentApp` para extrair o texto. |
+| `conhecimento` (Bloco de Notas .txt) | ✅ Sim | Base de conhecimento em formato Google Doc. Escreva os procedimentos, respostas e informações que a IA deve saber. O sistema usa `blob` para extrair o texto. |
 | `logo.png` | ❌ Opcional | Logotipo exibido no cabeçalho do chat |
 | `background.png` | ❌ Opcional | Imagem de fundo da interface |
 | `i.a.png` | ❌ Opcional | Avatar exibido nas mensagens da IA |
