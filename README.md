@@ -99,6 +99,14 @@ Dentro dela, adicione os seguintes arquivos:
 3. Adicione:
    - **Chave:** `GEMINI_API_KEY`
    - **Valor:** sua chave de API do Google AI Studio
+### 3.1 Configurar a Chave Para a planilha
+
+1. No editor do Apps Script, clique em **Configurações do projeto** (ícone de engrenagem ⚙️).
+2. Role até **Propriedades do script** e clique em **Adicionar propriedade**.
+3. Adicione:
+   - **Chave:** `SPREADSHEET_LOG_ID`
+   - **Valor:** Sua URL da planilha desconside os valores de marcação há uma função onde e possivel testar a conexão com planiha e para o feedback de like tambem
+   - **Planilha**  Crie uma Planilha no no Drive onde está sua pasta I.A conhecimento que contenha duas abas: "Perguntas_Falhas" e "Feedbacks" 
 
 > ⚠️ **Nunca coloque a chave diretamente no código.** Use sempre as Propriedades do Script para manter a chave segura.
 
